@@ -30,7 +30,11 @@ NOT authoritative for deletion: it never removes a skill absent from the manifes
 from __future__ import annotations
 import argparse, platform, shutil, subprocess, sys, tempfile
 from pathlib import Path
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError:
+    print("skills-sync.py needs PyYAML: pip install pyyaml", file=sys.stderr)
+    sys.exit(1)
 
 # Windows console in cp1252: the unicode glyphs (checkmark) would crash the print.
 if sys.stdout.encoding and sys.stdout.encoding.lower().replace("-", "") != "utf8":

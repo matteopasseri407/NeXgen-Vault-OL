@@ -19,7 +19,11 @@ dialect.
 from __future__ import annotations
 import argparse, difflib, json, os, platform, re, sys, time, tomllib
 from pathlib import Path
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError:
+    print("render.py needs PyYAML: pip install pyyaml", file=sys.stderr)
+    sys.exit(1)
 
 HOME = Path.home()
 HERE = Path(__file__).parent
