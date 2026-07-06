@@ -89,7 +89,7 @@ Le skill di base sono listate in `skills.manifest.yaml`. Per installarle:
 
 In tutti i casi, solo la CLI scelta riceve la config. Niente script ricorrenti.
 
-**Se MULTI**: istruisci l'utente a lanciare nel terminale il comando di provisioning:
+**Se MULTI**: prima di lanciare il provisioning, verifica che l'utente abbia già aperto ALMENO UNA VOLTA ogni CLI scelta (Claude Code, Codex, OpenCode, Antigravity), così il suo file di configurazione di default esiste. Il generatore MCP patcha chirurgicamente un file esistente, non lo crea da zero: su una CLI mai aperta il passo si limita a segnalarlo e passare oltre, senza errori vistosi, e sembrerebbe tutto a posto anche se quella CLI resta senza server MCP montati. Poi istruisci l'utente a lanciare nel terminale il comando di provisioning:
 - Su Linux/Mac: `bash 03-INFRA/scripts/agent-sync.sh apply`
 - Su Windows: `.\03-INFRA\scripts\agent-sync.ps1 apply`
 
@@ -200,7 +200,7 @@ Base skills are listed in `skills.manifest.yaml`. To install them:
 
 In every case, only the chosen CLI receives the config. No recurring scripts.
 
-**If MULTI**: instruct the user to run the provisioning command in their terminal:
+**If MULTI**: before running the provisioner, check that the user has already opened EACH chosen CLI (Claude Code, Codex, OpenCode, Antigravity) at least once, so its default config file exists. The MCP generator surgically patches an existing file, it does not create one from scratch: on a CLI that has never been launched, that step just flags it and moves on with no loud error, so it can look like everything is fine even though that CLI ends up with no MCP servers mounted. Then instruct the user to run the provisioning command in their terminal:
 - On Linux/Mac: `bash 03-INFRA/scripts/agent-sync.sh apply`
 - On Windows: `.\03-INFRA\scripts\agent-sync.ps1 apply`
 

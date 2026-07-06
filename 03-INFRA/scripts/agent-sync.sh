@@ -240,11 +240,13 @@ fi
 MCP_GEN="$UL/mcp/render.py"
 if [ -f "$MCP_GEN" ] && command -v python3 >/dev/null 2>&1; then
   for cli in opencode antigravity codex; do
-    if python3 "$MCP_GEN" --write "$cli" >>"$LOG" 2>&1; then
-      log "mcp-gen: $cli aligned with the manifest"
-    else
-      log "mcp-gen: $cli NOT aligned (best-effort, continuing)"
-    fi
+    python3 "$MCP_GEN" --write "$cli" >>"$LOG" 2>&1
+    rc=$?
+    case "$rc" in
+      0) log "mcp-gen: $cli aligned with the manifest" ;;
+      3) log "mcp-gen: $cli has no default config file yet (never launched?) — open it once, then re-run agent-sync" ;;
+      *) log "mcp-gen: $cli NOT aligned (best-effort, continuing)" ;;
+    esac
   done
   # Claude rewrites .claude.json live: only realign it if NO Claude session is
   # active, so as not to overwrite it underneath it. While Claude is active,
@@ -252,10 +254,14 @@ if [ -f "$MCP_GEN" ] && command -v python3 >/dev/null 2>&1; then
   # writes when in doubt).
   if pgrep -x claude >/dev/null 2>&1; then
     log "mcp-gen: claude ACTIVE -> not touching .claude.json live (sentinel only)"
-  elif python3 "$MCP_GEN" --write claude >>"$LOG" 2>&1; then
-    log "mcp-gen: claude aligned (was closed)"
   else
-    log "mcp-gen: claude not aligned (best-effort)"
+    python3 "$MCP_GEN" --write claude >>"$LOG" 2>&1
+    rc=$?
+    case "$rc" in
+      0) log "mcp-gen: claude aligned (was closed)" ;;
+      3) log "mcp-gen: claude has no .claude.json yet (never launched?) — open Claude Code once, then re-run agent-sync" ;;
+      *) log "mcp-gen: claude not aligned (best-effort)" ;;
+    esac
   fi
   diag="$(python3 "$MCP_GEN" 2>/dev/null | tail -1)"
   drift="$(printf '%s' "$diag" | sed -n 's/.*match, \([0-9]\{1,\}\) with differences.*/\1/p')"

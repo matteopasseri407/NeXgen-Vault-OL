@@ -122,6 +122,26 @@ if ((Get-Command "python" -ErrorAction SilentlyContinue) -and (Test-Path -Litera
   } else {
     ok "MCP configs 100% aligned with the canonical manifest"
   }
+  # A CLI that was never launched has no config file to patch: render.py just
+  # notes "(config not present...)" for it, with no [DIFF]/[MISSING] tag, so
+  # the drift scan above reads as clean even though that CLI has zero MCP
+  # servers mounted. OpenCode is already caught above (missing $OcJson is a
+  # hard fail there because it holds both instructions and MCP config); check
+  # the other three here so this doesn't stay a silent gap.
+  $renderText = ($renderOut | Out-String)
+  foreach ($cli in @("claude", "codex", "antigravity")) {
+    $upper = $cli.ToUpperInvariant()
+    $m = [regex]::Match($renderText, "(?ms)^========== $upper ==========\r?\n(.*?)(?=^==========|\z)")
+    if ($m.Success -and $m.Groups[1].Value -match "config not present") {
+      $have = $false
+      switch ($cli) {
+        "claude" { $have = [bool](Get-Command claude -ErrorAction SilentlyContinue) }
+        "codex" { $have = [bool](Get-Command codex -ErrorAction SilentlyContinue) }
+        "antigravity" { $have = Test-Path -LiteralPath (Join-Path $HomeDir ".gemini") }
+      }
+      if ($have) { warn "$cli is installed but has never been launched: its MCP config doesn't exist yet, open it once and re-run agent-sync.ps1" }
+    }
+  }
 } else {
   warn "python or render.py not found, skipping MCP drift check"
 }

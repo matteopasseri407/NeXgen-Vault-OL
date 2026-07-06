@@ -150,6 +150,23 @@ if command -v python3 >/dev/null 2>&1 && [ -f "$UL/mcp/render.py" ]; then
   else
     ok "MCP configs 100% aligned with the canonical manifest"
   fi
+  # A CLI that was never launched has no config file to patch: render.py just
+  # notes "(config not present...)" for it, with no [DIFF]/[MISSING] tag, so
+  # the drift scan above reads as clean even though that CLI has zero MCP
+  # servers mounted. OpenCode is already caught above (missing $OCJSON is a
+  # hard fail there because it holds both instructions and MCP config); check
+  # the other three here so this doesn't stay a silent gap.
+  for cli in claude codex antigravity; do
+    section="$(printf '%s\n' "$render_out" | awk -v s="========== $(printf '%s' "$cli" | tr '[:lower:]' '[:upper:]') ==========" '$0==s{p=1; next} /^========== /{p=0} p')"
+    if printf '%s\n' "$section" | grep -q "config not present"; then
+      case "$cli" in
+        claude) have=0; command -v claude >/dev/null 2>&1 && have=1 ;;
+        codex) have=0; command -v codex >/dev/null 2>&1 && have=1 ;;
+        antigravity) have=0; [ -d "$HOME/.gemini" ] && have=1 ;;
+      esac
+      [ "$have" = 1 ] && warn "$cli is installed but has never been launched: its MCP config doesn't exist yet, open it once and re-run agent-sync"
+    fi
+  done
 else
   warn "python3 or render.py not found, skipping MCP drift check"
 fi

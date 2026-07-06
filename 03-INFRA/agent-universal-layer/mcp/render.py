@@ -11,7 +11,11 @@ dialect.
     section would end up modified.
   - Servers OUTSIDE THE MANIFEST in the live file: never deleted. They are
     KEPT as-is and flagged (additive rule: something new installed by an
-    agent is the new standard to register in the manifest and propagate)."""
+    agent is the new standard to register in the manifest and propagate).
+  - Exit codes for --write: 0 = written or already compliant, 2 = blocked by
+    a safety guard (see the STOP message), 3 = the CLI's default config file
+    does not exist yet (it has never been launched once) — nothing to patch
+    until it has been opened at least once."""
 from __future__ import annotations
 import argparse, difflib, json, os, platform, re, sys, time, tomllib
 from pathlib import Path
@@ -176,7 +180,7 @@ def cmd_diff():
         current = load_current(cli)
         print(f"\n========== {cli.upper()} ==========")
         if current is None:
-            print("  (config not present: CLI not installed on this machine, skipped)"); continue
+            print("  (config not present: CLI not installed here, or installed but never launched yet, skipped)"); continue
         wanted = {n: s for n, s in man.items() if cli in s["targets"]}
         seen = set()
         for name, s in wanted.items():
@@ -256,7 +260,7 @@ def _prune_backups(path, keep=3):
 
 def write_json_section(path, key, new_section, live_section, serialize, indent_exact=None):
     if not path.exists():
-        print(f">>> {path.name} not present: CLI not configured, skipping."); return 0
+        print(f">>> {path.name} not present: CLI never launched yet (no default config file), skipping."); return 3
     raw = path.read_text("utf-8")
     live = json.loads(raw)
     # indent_exact: if given, only match the key at that exact indentation
@@ -306,7 +310,7 @@ def write_json_section(path, key, new_section, live_section, serialize, indent_e
 def write_opencode():
     path = HOME / ".config/opencode/opencode.json"
     if not path.exists():
-        print(">>> opencode.json not present: OpenCode not configured, skipping."); return 0
+        print(">>> opencode.json not present: OpenCode never launched yet (no default config file), skipping."); return 3
     live = json.loads(path.read_text("utf-8"))
     man = load_manifest()
     gen = {n: r_opencode(n, s) for n, s in man.items() if "opencode" in s["targets"]}
@@ -317,7 +321,7 @@ def write_opencode():
 def write_antigravity():
     path = HOME / ".gemini/antigravity/mcp_config.json"
     if not path.exists():
-        print(">>> mcp_config.json not present: Antigravity not configured, skipping."); return 0
+        print(">>> mcp_config.json not present: Antigravity never launched yet (no default config file), skipping."); return 3
     live = json.loads(path.read_text("utf-8"))
     live_servers = live.get("mcpServers", {})
     man = load_manifest()
@@ -369,7 +373,7 @@ def _content_range(lines, header_idx):
 def write_codex(path=None):
     path = path or HOME / ".codex/config.toml"
     if not path.exists():
-        print(f">>> {path.name} not present: Codex not configured, skipping."); return 0
+        print(f">>> {path.name} not present: Codex never launched yet (no default config file), skipping."); return 3
     raw = path.read_text("utf-8")
     lines = raw.split("\n")
     live = tomllib.loads(raw)
@@ -459,7 +463,7 @@ def write_claude(path=None):
     live)."""
     path = path or HOME / ".claude.json"
     if not path.exists():
-        print(">>> .claude.json not present: Claude not configured, skipping."); return 0
+        print(">>> .claude.json not present: Claude never launched yet (no default config file), skipping."); return 3
     live = json.loads(path.read_text("utf-8"))
     live_mcp = live.get("mcpServers", {})
     man = load_manifest()
