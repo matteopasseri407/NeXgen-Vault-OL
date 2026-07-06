@@ -440,7 +440,12 @@ function Sync-UniversalVaultSkills {
             (Join-Path $HomeDir ".codex\skills")
         )) {
             New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
-            Set-CanonicalDirectory -Source $sourceSkill.FullName -Target (Join-Path $runtimeRoot $sourceSkill.Name)
+            # Link to the HUB copy ($agentSkill), not the vault source directly.
+            # skills-sync.py (run right after, in Sync-ManifestSkills) links
+            # these same runtime paths to the hub too; pointing here at the
+            # vault source instead made every run recreate the link back and
+            # forth between two different targets on every single pass.
+            Set-CanonicalDirectory -Source $agentSkill -Target (Join-Path $runtimeRoot $sourceSkill.Name)
         }
     }
 }
@@ -699,7 +704,7 @@ function Send-Healthcheck {
 
         Write-Utf8NoBom -Path $stateFile -Content "$now`n$sig"
     }
-    catch { Write-Log "healthcheck: errore non fatale ($($_.Exception.Message))" }
+    catch { Write-Log "healthcheck: non-fatal error ($($_.Exception.Message))" }
 }
 
 function Install-StartupFallback {
