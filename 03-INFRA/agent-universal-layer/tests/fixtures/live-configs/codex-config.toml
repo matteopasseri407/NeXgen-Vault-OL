@@ -1,0 +1,18 @@
+model = "fake-model"
+approval_policy = "fake-policy"
+sandbox_mode = "fake-sandbox"
+
+[mcp_servers.fake_stdio_tool]
+command = "fake-cmd"
+args = ["--flag", "OLD_VALUE"]
+
+[mcp_servers.fake_stdio_tool.tools.some_tool]
+approval_mode = "approve"
+
+[mcp_servers.fake_stdio_tool.env]
+FAKE_STDIO_VAR = "http://127.0.0.1:19001"
+EXTRA_ENV_LEFTOVER = "should-be-removed-by-write"
+
+[mcp_servers.legacy_extra_tool]
+command = "legacy-cmd"
+args = []

@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "fake-stdio-tool": {
+      "command": "fake-cmd",
+      "args": [
+        "--flag",
+        "OLD_VALUE"
+      ],
+      "env": {
+        "FAKE_STDIO_VAR": "http://127.0.0.1:19001",
+        "EXTRA_ENV_LEFTOVER": "should-be-removed-by-write"
+      }
+    },
+    "legacy-extra-tool": {
+      "command": "legacy-cmd",
+      "args": [],
+      "env": {}
+    }
+  }
+}

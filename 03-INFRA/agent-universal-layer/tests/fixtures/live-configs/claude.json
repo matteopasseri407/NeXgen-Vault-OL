@@ -1,0 +1,30 @@
+{
+  "numStartups": 42,
+  "userID": "fake-user-id-0000",
+  "mcpServers": {
+    "fake-stdio-tool": {
+      "type": "stdio",
+      "command": "fake-cmd",
+      "args": [
+        "--flag",
+        "OLD_VALUE"
+      ],
+      "env": {
+        "FAKE_STDIO_VAR": "http://127.0.0.1:19001",
+        "EXTRA_ENV_LEFTOVER": "should-be-removed-by-write"
+      }
+    },
+    "legacy-extra-tool": {
+      "type": "stdio",
+      "command": "legacy-cmd",
+      "args": [],
+      "env": {}
+    }
+  },
+  "projects": {
+    "/fake/project/path": {
+      "mcpServers": {},
+      "allowedTools": []
+    }
+  }
+}

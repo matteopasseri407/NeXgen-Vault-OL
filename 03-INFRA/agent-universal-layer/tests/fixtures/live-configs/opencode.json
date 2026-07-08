@@ -1,0 +1,27 @@
+{
+  "$schema": "https://fake.example.invalid/opencode-schema.json",
+  "model": "fake-provider/fake-model",
+  "autoupdate": false,
+  "mcp": {
+    "fake-stdio-tool": {
+      "type": "local",
+      "command": [
+        "fake-cmd",
+        "--flag",
+        "OLD_VALUE"
+      ],
+      "enabled": true,
+      "environment": {
+        "FAKE_STDIO_VAR": "http://127.0.0.1:19001",
+        "EXTRA_ENV_LEFTOVER": "should-be-removed-by-write"
+      }
+    },
+    "legacy-extra-tool": {
+      "type": "local",
+      "command": [
+        "legacy-cmd"
+      ],
+      "enabled": true
+    }
+  }
+}

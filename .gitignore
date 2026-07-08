@@ -38,6 +38,7 @@ id_ed25519
 # Python noise (scripts generate this on run)
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # OS/editor noise
 .DS_Store

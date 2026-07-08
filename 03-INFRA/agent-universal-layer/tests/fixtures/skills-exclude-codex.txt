@@ -1,0 +1,2 @@
+# Exclude-list sintetica per i test (runtime codex)
+fake-skill-excluded

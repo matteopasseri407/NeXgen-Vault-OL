@@ -1,0 +1,9 @@
+# Manifest skill SINTETICO per i test (B1). Nomi e origin inventati.
+skills:
+  fake-skill-a:
+    origin: vault
+    targets: [claude, codex]
+
+  fake-skill-excluded:
+    origin: vault
+    targets: [claude, codex]

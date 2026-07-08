@@ -1,0 +1,38 @@
+# Manifest MCP SINTETICO per i test di render.py (B1). Nessun valore reale:
+# nomi, comandi, URL e token sono tutti inventati da zero apposta per i test
+# (regola B1: "dati SOLO inventati da zero, mai derivati da config/note reali").
+servers:
+
+  fake-stdio-tool:
+    transport: stdio
+    command: fake-cmd
+    args: ["--flag", "value"]
+    env:
+      FAKE_STDIO_VAR: "http://127.0.0.1:19001"
+    targets: [claude, codex, antigravity, opencode]
+
+  fake-http-api:
+    transport: http
+    url: "https://fake-api.example.invalid/mcp"
+    auth: { type: bearer, env: FAKE_TOKEN }
+    timeouts: { startup: 30, tool: 60 }
+    targets: [claude, codex, antigravity, opencode]
+
+  fake-cross-os-tool:
+    transport: stdio
+    command: python3
+    args: ["/fake/vault/path/tool.py"]
+    env:
+      FAKE_TOOL_URL: "http://127.0.0.1:19002"
+    targets: [claude, codex, antigravity, opencode]
+    windows:
+      command: python
+      args: ["C:\\fake\\vault\\path\\tool.py"]
+      env:
+        FAKE_TOOL_URL: "http://127.0.0.1:19002"
+
+  fake-codex-only:
+    transport: stdio
+    command: npx
+    args: ["-y", "fake-codex-only-mcp"]
+    targets: [codex]
