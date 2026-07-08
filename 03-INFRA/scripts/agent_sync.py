@@ -257,6 +257,31 @@ def _post_form(url: str, fields: dict) -> bool:
         return False
 
 
+def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
+    """write_text() truncates then writes: a live CLI re-reading the same
+    file (settings.json, CLAUDE.md, the systemd unit...) while the 30-minute
+    recurring timer regenerates it can catch a truncated/empty file. Write to
+    a same-directory temp file and os.replace() it in, which POSIX/Windows
+    both guarantee atomic for a rename onto an existing path. Copies the
+    existing file's mode onto the temp file first: os.replace is a rename,
+    not an in-place write, so without this a plain rewrite would silently
+    reset any non-default permission bits to the process umask."""
+    old_mode = None
+    if path.exists():
+        try:
+            old_mode = path.stat().st_mode
+        except OSError:
+            pass
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(content, encoding=encoding)
+    if old_mode is not None:
+        try:
+            os.chmod(tmp, old_mode)
+        except OSError:
+            pass
+    os.replace(tmp, path)
+
+
 def _write_if_different(path: Path, content: str) -> bool:
     """Writes content to path unless it's already a regular file with the
     identical content (mirrors agent-sync.sh's write_claude_pointer guard:
@@ -270,7 +295,7 @@ def _write_if_different(path: Path, content: str) -> bool:
     if path.is_symlink() or path.exists():
         path.unlink()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    _atomic_write_text(path, content)
     return True
 
 
@@ -489,9 +514,11 @@ def _systemd_service_content(env: "Env") -> str:
     default_engine_root = (env.vault / "03-INFRA").resolve()
     if env.engine_root.resolve() != default_engine_root:
         lines.append(f"Environment=AGENT_ENGINE_ROOT={env.engine_root}")
-    vault_data = os.environ.get("AGENT_VAULT_DATA")
-    if vault_data:
-        lines.append(f"Environment=AGENT_VAULT_DATA={vault_data}")
+    # env.vault_data (not the raw env var): a bare run with AGENT_VAULT_DATA
+    # unset must not erase an already-persisted cutover the same way a bare
+    # AGENT_ENGINE_ROOT-less run used to silently revert engine_root above.
+    if env.vault_data.resolve() != env.vault.resolve():
+        lines.append(f"Environment=AGENT_VAULT_DATA={env.vault_data}")
     lines.append("ExecStart=%h/.local/bin/agent-sync guard")
     return "\n".join(lines) + "\n"
 
@@ -525,7 +552,7 @@ def _install_systemd_units(env: Env) -> None:
                 pass
             stamp = time.strftime("%Y%m%d-%H%M%S")
             shutil.copy2(path, path.with_name(f"{path.name}.pre-pull-mode-{stamp}.bak"))
-        path.write_text(content, encoding="utf-8")
+        _atomic_write_text(path, content)
         changed = True
         env.log(f"systemd: {label}")
     if changed and resolve_cmd("systemctl"):
@@ -746,7 +773,7 @@ def claude_hooks(env: Env) -> None:
         return
     stamp = time.strftime("%Y%m%d-%H%M%S")
     shutil.copy2(settings_path, settings_path.with_name(f"settings.json.pre-hooks-{stamp}.bak"))
-    settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_text(settings_path, json.dumps(settings, indent=2) + "\n")
     env.log(f"claude-hooks: merged SessionStart/PreCompact into {settings_path}")
 
 
@@ -918,7 +945,7 @@ def _send_healthcheck(env: Env) -> None:
             last_sig = lines[1]
 
     if not problem:
-        state_file.write_text(f"{now}\nok\n", encoding="utf-8")
+        _atomic_write_text(state_file, f"{now}\nok\n")
         return
 
     send = sig != last_sig or (now - last) >= interval
@@ -943,7 +970,7 @@ def _send_healthcheck(env: Env) -> None:
         env.log(f"healthcheck: sent ({sig})")
     else:
         env.log(f"healthcheck: {summary} (no transport configured)")
-    state_file.write_text(f"{now}\n{sig}\n", encoding="utf-8")
+    _atomic_write_text(state_file, f"{now}\n{sig}\n")
 
 
 def creds_health(env: Env, *, do_creds: bool, do_health: bool) -> None:

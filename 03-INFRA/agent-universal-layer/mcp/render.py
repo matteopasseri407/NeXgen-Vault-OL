@@ -267,6 +267,29 @@ def _prune_backups(path, keep=3):
         except OSError:
             pass
 
+def _atomic_write_text(path, text, encoding="utf-8"):
+    """write_text() truncates then writes: a CLI re-reading the file (this
+    runs on a 30-minute recurring timer, config files are live) can catch it
+    mid-write and see a truncated/empty JSON. Write to a same-directory temp
+    file and os.replace() it in, which POSIX/Windows both guarantee atomic
+    for a rename onto an existing path. Copies the existing file's mode onto
+    the temp file first: os.replace is a rename, not an in-place write, so
+    without this a rewrite would silently reset permission bits to umask."""
+    old_mode = None
+    if path.exists():
+        try:
+            old_mode = path.stat().st_mode
+        except OSError:
+            pass
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding=encoding)
+    if old_mode is not None:
+        try:
+            os.chmod(tmp, old_mode)
+        except OSError:
+            pass
+    os.replace(tmp, path)
+
 def write_json_section(path, key, new_section, live_section, serialize, indent_exact=None):
     if not path.exists():
         print(f">>> {path.name} not present: CLI never launched yet (no default config file), skipping."); return 3
@@ -311,7 +334,7 @@ def write_json_section(path, key, new_section, live_section, serialize, indent_e
     bak = path.with_name(path.name + ".bak-" + time.strftime("%Y%m%d-%H%M%S"))
     bak.write_text(raw, "utf-8")
     _prune_backups(path)
-    path.write_text(new_text, "utf-8")
+    _atomic_write_text(path, new_text, "utf-8")
     json.loads(path.read_text("utf-8"))
     print(f"\n>>> WRITTEN and validated (JSON ok). Backup: {bak}")
     return 0
@@ -458,7 +481,7 @@ def write_codex(path=None):
     bak = path.with_name(path.name + ".bak-" + time.strftime("%Y%m%d-%H%M%S"))
     bak.write_text(raw, "utf-8")
     _prune_backups(path)
-    path.write_text(new_text, "utf-8")
+    _atomic_write_text(path, new_text, "utf-8")
     tomllib.loads(path.read_text("utf-8"))
     print(f"\n>>> WRITTEN and validated (TOML ok). Backup: {bak}")
     return 0

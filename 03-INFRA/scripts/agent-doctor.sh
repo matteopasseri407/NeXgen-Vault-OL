@@ -7,7 +7,17 @@
 set -u
 
 VAULT="${KNOWLEDGE_VAULT_PATH:-$HOME/KnowledgeVault}"
-UL="$VAULT/03-INFRA/agent-universal-layer"
+VAULT_DATA="${AGENT_VAULT_DATA:-$VAULT}"
+# Where THIS script itself lives: render.py, skills-sync.py and the OCR MCP
+# wrapper always ship in the same engine tree as agent-doctor.sh, so its own
+# resolved location is a more reliable source of truth than re-deriving a
+# path from KNOWLEDGE_VAULT_PATH -- which silently breaks the moment engine
+# and vault data live in two different places (confirmed live: this is why
+# the MCP-drift check below was silently skipping after the S3 cutover).
+SELF_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+ENGINE_ROOT="${AGENT_ENGINE_ROOT:-$(dirname "$SELF_DIR")}"
+ENGINE_UL="$ENGINE_ROOT/agent-universal-layer"
+UL="$VAULT_DATA/03-INFRA/agent-universal-layer"
 CANON="$UL/instructions/AGENTS.md"
 REMOTE="${KNOWLEDGE_VAULT_REMOTE:-origin}"
 BRANCH="${KNOWLEDGE_VAULT_BRANCH:-main}"
@@ -129,8 +139,8 @@ done
 [ -n "${DEEPSEEK_API_KEY:-}" ] && ok "DEEPSEEK_API_KEY present" || warn "DEEPSEEK_API_KEY missing (only affects direct DeepSeek fallback/batch; OpenCode Go stays fine)"
 
 sec "MCP configured in the runtimes (Vault 2.0 drift detection)"
-if command -v python3 >/dev/null 2>&1 && [ -f "$UL/mcp/render.py" ]; then
-  render_out="$(python3 "$UL/mcp/render.py" 2>&1)"
+if command -v python3 >/dev/null 2>&1 && [ -f "$ENGINE_UL/mcp/render.py" ]; then
+  render_out="$(python3 "$ENGINE_UL/mcp/render.py" 2>&1)"
   render_rc=$?
   if [ "$render_rc" -ne 0 ]; then
     # A crash here (missing PyYAML, a broken manifest, a permission error...)
@@ -233,7 +243,7 @@ PY
     warn "opencode not in PATH, skipping OpenCode consumer test"
   fi
 
-  OCR_MCP="$UL/ocr/mcp/vault_ocr_mcp.py"
+  OCR_MCP="$ENGINE_ROOT/deploy/ocr/mcp/vault_ocr_mcp.py"
   if command -v python3 >/dev/null 2>&1 && [ -f "$OCR_MCP" ]; then
     if python3 - "$OCR_MCP" <<'PY' >/dev/null 2>&1; then
 import json, subprocess, sys
@@ -298,7 +308,7 @@ for s in "$HOME/.agents/skills"/*; do
   if [ -e "$s" ]; then n=$((n+1)); else broken="$broken $(basename "$s")"; fi
 done
 [ "${n:-0}" -gt 0 ] && ok "$n readable skills in ~/.agents/skills" || fail "no readable skill in ~/.agents/skills"
-[ -n "$broken" ] && fail "BROKEN skills (self-loop/dangling symlink):$broken — fix with: python3 \$VAULT/03-INFRA/scripts/skills-sync.py --apply"
+[ -n "$broken" ] && fail "BROKEN skills (self-loop/dangling symlink):$broken — fix with: python3 $ENGINE_ROOT/scripts/skills-sync.py --apply"
 # Runtimes must resolve the essential skills (from the manifest) down to a real SKILL.md.
 ess_ok=1
 for ess in humanizer knowledge-vault-hygiene frontend-design; do
@@ -392,7 +402,7 @@ CONSUMER_ENGINE_ROOT="${AGENT_ENGINE_ROOT:-$HOME/.nexgen-engine/03-INFRA}"
 CONSUMER_ENGINE_REPO="$(dirname "$CONSUMER_ENGINE_ROOT")"
 if [ -d "$CONSUMER_ENGINE_REPO/.git" ]; then
   sec "Consumer engine clone — version pin (S2)"
-  PIN_FILE="$VAULT/99-INDEX/ENGINE-PIN.txt"
+  PIN_FILE="$VAULT_DATA/99-INDEX/ENGINE-PIN.txt"
   live_sha=$(git -C "$CONSUMER_ENGINE_REPO" rev-parse HEAD 2>/dev/null || echo "")
   if [ -z "$live_sha" ]; then
     fail "cannot read the consumer engine clone's HEAD ($CONSUMER_ENGINE_REPO)"

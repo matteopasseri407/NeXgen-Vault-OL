@@ -213,6 +213,58 @@ if (Test-Path -LiteralPath $settingsPath) {
 }
 else { warn "Claude settings.json missing (Claude not installed here?)" }
 
+# Public engine repo - anti-leak gates (S0). Maintainer lane: these checks
+# only apply where a working clone of the public engine repo exists (the
+# machine that publishes engine code). Where none exists, this section is
+# skipped silently - a consumer-only install has nothing to verify here.
+# Ported from agent-doctor.sh (bash never had a Windows twin for this).
+$EngineRepo = if ($env:ENGINE_REPO) { $env:ENGINE_REPO } else { Join-Path $HomeDir "NeXgen-Vault-OL" }
+if (Test-Path -LiteralPath (Join-Path $EngineRepo ".git")) {
+  sec "Public engine repo - anti-leak gates (S0)"
+  $pushUrl = (& git -C $EngineRepo config --get remote.origin.pushurl 2>$null)
+  if ("$pushUrl".StartsWith("PUSH-DISABLED")) { ok "direct push disabled on the engine clone ($EngineRepo)" }
+  else { bad "direct push NOT disabled on the engine clone: git -C $EngineRepo remote set-url --push origin PUSH-DISABLED-use-engine-push" }
+  $fetchUrl = (& git -C $EngineRepo config --get remote.origin.url 2>$null)
+  if (-not $fetchUrl -or "$fetchUrl".StartsWith("PUSH-DISABLED")) { bad "the engine clone's remote.origin.url is not a valid URL" }
+  else { ok "engine clone fetch url intact" }
+  $hooksSrc = Join-Path $Layer "sanitize\engine-hooks"
+  if (Test-Path -LiteralPath $hooksSrc) {
+    foreach ($h in @("pre-commit", "commit-msg")) {
+      $installed = Join-Path $EngineRepo ".git\hooks\$h"
+      $tracked = Join-Path $hooksSrc $h
+      if ((Test-Path -LiteralPath $installed) -and (Test-Path -LiteralPath $tracked)) {
+        if ((hashOf $installed) -eq (hashOf $tracked)) { ok "hook $h installed and aligned with its tracked source" }
+        else { warn "hook $h installed but DIFFERENT from its tracked source (drift - reinstall from $tracked)" }
+      } else { bad "hook $h missing from the engine clone (.git\hooks\$h) - reinstall from $tracked" }
+    }
+  } else { warn "anti-leak hook sources not found ($hooksSrc) - cannot verify the engine clone's hooks" }
+  if (Get-Command engine-push -ErrorAction SilentlyContinue) { ok "engine-push available in PATH" }
+  else { bad "engine-push not found in PATH - it is the only allowed push channel for the engine repo" }
+}
+
+# Consumer engine clone - version pin (S2). Applies only where a consumer
+# clone exists (default %USERPROFILE%\.nexgen-engine, or AGENT_ENGINE_ROOT's
+# repo root). Before the cutover this machine has none, so the whole section
+# is skipped silently - same pattern as the S0 section above.
+$ConsumerEngineRoot = if ($env:AGENT_ENGINE_ROOT) { $env:AGENT_ENGINE_ROOT } else { Join-Path $HomeDir ".nexgen-engine\03-INFRA" }
+$ConsumerEngineRepo = Split-Path -Parent $ConsumerEngineRoot
+if (Test-Path -LiteralPath (Join-Path $ConsumerEngineRepo ".git")) {
+  sec "Consumer engine clone - version pin (S2)"
+  $pinFile = Join-Path $Vault "99-INDEX\ENGINE-PIN.txt"
+  $liveSha = (& git -C $ConsumerEngineRepo rev-parse HEAD 2>$null)
+  if (-not $liveSha) { bad "cannot read the consumer engine clone's HEAD ($ConsumerEngineRepo)" }
+  elseif (Test-Path -LiteralPath $pinFile) {
+    $pinSha = (Get-Content -LiteralPath $pinFile -TotalCount 1).Trim()
+    $liveShort = if ($liveSha.Length -ge 7) { $liveSha.Substring(0,7) } else { $liveSha }
+    $pinShort = if ($pinSha.Length -ge 7) { $pinSha.Substring(0,7) } else { $pinSha }
+    if ($pinSha -eq $liveSha) { ok "consumer engine at the pinned version ($liveShort)" }
+    else { bad "consumer engine at $liveShort, pin expects $pinShort - silent drift: pull was skipped, or the pin wasn't updated after a deliberate upgrade" }
+  } else { warn "no engine pin set ($pinFile missing) - consumer engine version isn't tracked yet" }
+  $pushUrl2 = (& git -C $ConsumerEngineRepo config --get remote.origin.pushurl 2>$null)
+  if ("$pushUrl2".StartsWith("PUSH-DISABLED")) { ok "direct push disabled on the consumer engine clone" }
+  else { bad "direct push NOT disabled on the consumer engine clone: git -C $ConsumerEngineRepo remote set-url --push origin PUSH-DISABLED-use-engine-push" }
+}
+
 if ($Summary) {
   $line = "agent-doctor [windows] PASS=$($script:PASS) WARN=$($script:WARN) FAIL=$($script:FAILN)"
   if ($script:FAILN -gt 0) { $line += " | FAIL: " + ($script:FAILS -join ', ') }
