@@ -80,9 +80,18 @@ class Sandbox:
         self.assert_is_sandbox()
         e = dict(os.environ)
         e["HOME"] = str(self.home)
+        e["USERPROFILE"] = str(self.home)
         e["KNOWLEDGE_VAULT_PATH"] = str(self.vault)
         e["KNOWLEDGE_VAULT_REMOTE"] = "origin-non-esiste-in-sandbox"
         e["PATH"] = f"{self.bin_stubs}:{e.get('PATH', '')}"
+        for key in (
+            "TELEGRAM_BOT_TOKEN",
+            "TELEGRAM_CHAT_ID",
+            "VAULT_ALERT_WEBHOOK",
+            "N8N_TELEGRAM_CRED_ID",
+            "REMOTE_ALIAS",
+        ):
+            e.pop(key, None)
         e.update(extra)
         return e
 
@@ -124,7 +133,7 @@ def _copy_engine_scripts(sandbox: Sandbox) -> None:
     (sandbox.ul / "hooks").mkdir(parents=True, exist_ok=True)
 
     shutil.copy2(REAL_UL / "mcp" / "render.py", sandbox.mcp_dir / "render.py")
-    for name in ("agent-sync.sh", "skills-sync.py", "agent-doctor.sh"):
+    for name in ("agent-sync.sh", "agent_sync.py", "skills-sync.py", "agent-doctor.sh"):
         dst = sandbox.scripts_dir / name
         shutil.copy2(REAL_SCRIPTS / name, dst)
         dst.chmod(dst.stat().st_mode | stat.S_IEXEC)
@@ -212,10 +221,30 @@ def load_skills_sync_module(sandbox: Sandbox):
     return mod
 
 
+def load_agent_sync_module(sandbox: Sandbox):
+    spec = importlib.util.spec_from_file_location(
+        f"agent_sync_under_test_{id(sandbox)}", sandbox.scripts_dir / "agent_sync.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def run_agent_sync(sandbox: Sandbox, mode: str = "apply", timeout: int = 60) -> subprocess.CompletedProcess:
     sandbox.assert_is_sandbox()
     return subprocess.run(
         ["bash", str(sandbox.scripts_dir / "agent-sync.sh"), mode],
+        env=sandbox.env(),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def run_agent_sync_python(sandbox: Sandbox, mode: str = "apply", timeout: int = 60) -> subprocess.CompletedProcess:
+    sandbox.assert_is_sandbox()
+    return subprocess.run(
+        [sys.executable, str(sandbox.scripts_dir / "agent_sync.py"), mode],
         env=sandbox.env(),
         capture_output=True,
         text=True,

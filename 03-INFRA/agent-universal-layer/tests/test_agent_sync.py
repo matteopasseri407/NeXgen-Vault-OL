@@ -7,7 +7,14 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from conftest import run_agent_sync
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="POSIX launcher/symlink regression tests run on Ubuntu; Windows runs agent_sync.py smoke.",
+)
 
 RUNTIME_DIRS = (".claude/skills", ".codex/skills")
 

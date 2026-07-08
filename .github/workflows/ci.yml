@@ -87,12 +87,6 @@ jobs:
     # Regression net for the engine (B1, 2026-07-08): sandboxed, never touches
     # the runner's real HOME. Canonical runner is `python -m pytest` (not
     # tests/run.sh, which is a thin Fedora-only convenience wrapper).
-    #
-    # No windows-latest job yet on purpose: the bash-based tests here
-    # (agent-sync.sh / agent-doctor.sh) only cover the Fedora/.sh side. The
-    # .ps1 twins get their own test coverage in a later package (provisioner
-    # unification), and only then does a real windows-latest job get added —
-    # a partial Windows job today would just be false confidence.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -107,3 +101,22 @@ jobs:
       - name: Engine regression suite
         working-directory: 03-INFRA/agent-universal-layer/tests
         run: python3 -m pytest -v
+
+  engine-tests-windows:
+    # B2.5: Windows now exercises the shared Python provisioner. POSIX-only
+    # shell/doctor tests are skipped by pytest markers; the Windows-specific
+    # value is the direct agent_sync.py guard smoke in a sandboxed USERPROFILE.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install test dependencies
+        run: pip install pytest pyyaml
+
+      - name: Engine regression suite and agent_sync.py smoke
+        working-directory: 03-INFRA/agent-universal-layer/tests
+        run: python -m pytest -v

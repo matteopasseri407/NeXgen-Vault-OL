@@ -13,9 +13,17 @@ STESSA sandbox. Confrontiamo baseline vs drift, non l'exit code assoluto.
 """
 from __future__ import annotations
 
+import os
 import re
 
+import pytest
+
 from conftest import run_agent_doctor, run_agent_sync
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="agent-doctor.sh is POSIX-only; B2.5 Windows coverage is agent_sync.py smoke.",
+)
 
 
 def _parse_summary(stdout: str) -> tuple[int, int, int]:
