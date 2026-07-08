@@ -108,7 +108,7 @@ def test_write_produces_expected_output(sandbox_with_live_configs, cli):
                 assert after.get(k) == before[k], f"codex: sezione non-MCP '{k}' modificata"
         for name, spec in wanted.items():
             cname = name.replace("-", "_")
-            expected_full = dict(mod.r_codex(name, spec))
+            expected_full = dict(mod.r_codex(name, mod.os_view(spec)))
             env = expected_full.pop("env", None)
             got = after["mcp_servers"][cname]
             for k, v in expected_full.items():
@@ -129,7 +129,7 @@ def test_write_produces_expected_output(sandbox_with_live_configs, cli):
         render_fn = {"claude": mod.r_claude, "opencode": mod.r_opencode, "antigravity": mod.r_antigravity}[cli]
         name_fn = {"claude": lambda n: n, "opencode": lambda n: n, "antigravity": lambda n: n}[cli]
         for name, spec in wanted.items():
-            expected = render_fn(name, spec)
+            expected = render_fn(name, mod.os_view(spec))
             got = after[key][name_fn(name)]
             assert got == expected, f"{cli}/{name}: reso {got!r}, atteso {expected!r}"
         # server extra fuori manifest preservato + segnalato
