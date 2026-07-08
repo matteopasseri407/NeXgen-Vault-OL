@@ -384,6 +384,35 @@ if [ -d "$ENGINE_REPO/.git" ]; then
   fi
 fi
 
+# Consumer engine clone — version pin (S2). Applies only where a consumer
+# clone exists (default ~/.nexgen-engine, or AGENT_ENGINE_ROOT's repo root).
+# Before the cutover this machine has none, so the whole section is skipped
+# silently — same pattern as the S0 section above.
+CONSUMER_ENGINE_ROOT="${AGENT_ENGINE_ROOT:-$HOME/.nexgen-engine/03-INFRA}"
+CONSUMER_ENGINE_REPO="$(dirname "$CONSUMER_ENGINE_ROOT")"
+if [ -d "$CONSUMER_ENGINE_REPO/.git" ]; then
+  sec "Consumer engine clone — version pin (S2)"
+  PIN_FILE="$VAULT/99-INDEX/ENGINE-PIN.txt"
+  live_sha=$(git -C "$CONSUMER_ENGINE_REPO" rev-parse HEAD 2>/dev/null || echo "")
+  if [ -z "$live_sha" ]; then
+    fail "cannot read the consumer engine clone's HEAD ($CONSUMER_ENGINE_REPO)"
+  elif [ -f "$PIN_FILE" ]; then
+    pin_sha=$(head -1 "$PIN_FILE" | tr -d '[:space:]')
+    if [ "$pin_sha" = "$live_sha" ]; then
+      ok "consumer engine at the pinned version (${live_sha:0:7})"
+    else
+      fail "consumer engine at ${live_sha:0:7}, pin expects ${pin_sha:0:7} — silent drift: pull was skipped, or the pin wasn't updated after a deliberate upgrade"
+    fi
+  else
+    warn "no engine pin set ($PIN_FILE missing) — consumer engine version isn't tracked yet, run: git -C $CONSUMER_ENGINE_REPO rev-parse HEAD > $PIN_FILE"
+  fi
+  pushurl=$(git -C "$CONSUMER_ENGINE_REPO" config --get remote.origin.pushurl 2>/dev/null || echo "")
+  case "$pushurl" in
+    PUSH-DISABLED*) ok "direct push disabled on the consumer engine clone" ;;
+    *) fail "direct push NOT disabled on the consumer engine clone: git -C $CONSUMER_ENGINE_REPO remote set-url --push origin PUSH-DISABLED-use-engine-push" ;;
+  esac
+fi
+
 if [ "$QUIET" = 1 ]; then
   line="agent-doctor [$HOST] PASS=$PASS WARN=$WARN FAIL=$FAILN"
   [ "$FAILN" -gt 0 ] && line="$line | FAIL: $FAILS"
