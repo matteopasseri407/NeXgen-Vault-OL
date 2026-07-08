@@ -847,6 +847,27 @@ def _doctor_summary(env: Env, timeout: int) -> str | None:
     return lines[-1] if lines else None
 
 
+def _localize_alert(env: Env, msg: str) -> str:
+    """The engine's own strings are English-only, deliberately: this is a
+    public repo, and mixing languages in the SOURCE is worse than being
+    all-English. Translation is the user's own concern, done in their DATA,
+    never hardcoded here. If vault_data/03-INFRA/alert-translate.sh exists
+    and is executable, it gets the English message on stdin and its stdout
+    (if non-empty) replaces it; any failure (missing, not executable,
+    non-zero exit, timeout, empty output) falls back to the English
+    original — a broken translator must never swallow a real alert."""
+    translator = env.vault_data / "03-INFRA" / "alert-translate.sh"
+    if not (translator.is_file() and os.access(translator, os.X_OK)):
+        return msg
+    try:
+        r = subprocess.run(["bash", str(translator)], input=msg, capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return msg
+
+
 def _send_healthcheck(env: Env) -> None:
     timeout = int(os.environ.get("AGENT_DOCTOR_TIMEOUT_SECONDS") or 20)
     summary = _doctor_summary(env, timeout=timeout)
@@ -874,7 +895,8 @@ def _send_healthcheck(env: Env) -> None:
         return
 
     hostn = platform.node()
-    msg = f"[PROBLEMA AGENTI] [{hostn}] {time.strftime('%Y-%m-%d %H:%M')}\n{summary}"
+    msg = f"[AGENT ALERT] [{hostn}] {time.strftime('%Y-%m-%d %H:%M')}\n{summary}"
+    msg = _localize_alert(env, msg)
     sent = False
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     webhook = os.environ.get("VAULT_ALERT_WEBHOOK")

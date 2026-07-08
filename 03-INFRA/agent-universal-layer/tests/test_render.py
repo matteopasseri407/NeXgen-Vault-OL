@@ -25,7 +25,7 @@ DIALECTS = ["claude", "codex", "opencode", "antigravity"]
 # sola lingua.
 _MISSING_MARKERS = ("[MANCA]", "[MISSING]")
 _OUTSIDE_MANIFEST_MARKERS = ("FUORI MANIFEST", "OUTSIDE THE MANIFEST")
-_NOTHING_TO_WRITE_MARKERS = ("niente da scrivere", "gia' conforme", "già conforme", "nothing to write", "already compliant")
+_NOTHING_TO_WRITE_MARKERS = ("nothing to write", "already compliant")
 
 
 def _has_any(text: str, markers: tuple[str, ...]) -> bool:

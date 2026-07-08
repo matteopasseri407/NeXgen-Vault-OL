@@ -51,18 +51,29 @@ send=0
 # doctor's full run.
 failn="$(printf '%s' "$summary" | sed -n 's/.*FAIL=\([0-9]\{1,\}\).*/\1/p')"
 fail_lines="$("$DOCTOR" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep '✗' | sed 's/^[[:space:]]*✗[[:space:]]*/• /' | head -6)"
-[ -n "$fail_lines" ] || fail_lines="• dettaglio non disponibile (vedi log)"
+[ -n "$fail_lines" ] || fail_lines="• detail not available (see log)"
 
-msg="🔴 Fallimento nei controlli automatici degli agenti su ${HOSTN} — $(date '+%d/%m %H:%M')
+msg="🔴 Automatic agent checks failed on ${HOSTN} — $(date '+%d/%m %H:%M')
 
-Errori rilevati:
+Errors found:
 ${fail_lines}
 
-Risoluzione:
-Delega la diagnosi a un agente incollando questo prompt in Claude/Antigravity:
-«Gira agent-doctor, spiegami in soldoni cosa è saltato e sistema i FAIL»
+Fix:
+Hand this prompt to an agent in Claude/Antigravity as-is:
+\"Run agent-doctor, explain in plain terms what broke, and fix the FAILs\"
 
-(Stato: ${summary})"
+(State: ${summary})"
+
+# The engine's own strings are English-only, deliberately (see agent_sync.py's
+# _localize_alert): translation is the user's own concern, done in DATA, never
+# hardcoded here. If vault_data/03-INFRA/alert-translate.sh exists and is
+# executable, it gets this English message on stdin and its stdout (if
+# non-empty) replaces it; any failure falls back to the English original.
+TRANSLATOR="$VAULT/03-INFRA/alert-translate.sh"
+if [ -x "$TRANSLATOR" ]; then
+  translated="$(printf '%s' "$msg" | "$TRANSLATOR" 2>/dev/null)"
+  [ -n "$translated" ] && msg="$translated"
+fi
 
 sent=0
 if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then

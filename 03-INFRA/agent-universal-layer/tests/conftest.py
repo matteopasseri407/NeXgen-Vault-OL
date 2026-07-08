@@ -1,9 +1,9 @@
-"""Infrastruttura condivisa dei test B1 (fixtures del motore).
+"""Shared infrastructure for the B1 tests (engine fixtures).
 
-Ogni test gira dentro una HOME sandbox temporanea (mktemp), MAI contro la HOME
-reale. Il runner si rifiuta di procedere se manca il file sentinella: è la
-garanzia che nessun assert di questi test possa mai leggere/scrivere fuori
-dalla sandbox, anche se un test futuro dimentica di passare l'ambiente giusto.
+Every test runs inside a temporary sandbox HOME (mktemp), NEVER against the
+real HOME. The runner refuses to proceed if the sentinel file is missing:
+that's the guarantee that no assertion in these tests can ever read/write
+outside the sandbox, even if a future test forgets to pass the right env.
 """
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ import pytest
 
 TESTS_DIR = Path(__file__).resolve().parent
 FIXTURES = TESTS_DIR / "fixtures"
-REAL_UL = TESTS_DIR.parent                      # .../agent-universal-layer (sorgente vera)
-REAL_VAULT = REAL_UL.parent.parent               # KnowledgeVault (root vero)
+REAL_UL = TESTS_DIR.parent                      # .../agent-universal-layer (real source)
+REAL_VAULT = REAL_UL.parent.parent               # KnowledgeVault (real root)
 REAL_SCRIPTS = REAL_VAULT / "03-INFRA" / "scripts"
 
 SENTINEL_NAME = ".b1-sandbox-sentinel"
@@ -72,8 +72,8 @@ class Sandbox:
         sentinel = self.home / SENTINEL_NAME
         if not sentinel.is_file():
             raise RuntimeError(
-                f"RIFIUTO: {self.home} non e' una sandbox di test (manca {SENTINEL_NAME}). "
-                "Non eseguo MAI script reali contro una HOME che non sia sicuramente sandbox."
+                f"REFUSED: {self.home} is not a test sandbox (missing {SENTINEL_NAME}). "
+                "NEVER run real scripts against a HOME that isn't verifiably a sandbox."
             )
 
     def env(self, **extra) -> dict:
@@ -82,7 +82,7 @@ class Sandbox:
         e["HOME"] = str(self.home)
         e["USERPROFILE"] = str(self.home)
         e["KNOWLEDGE_VAULT_PATH"] = str(self.vault)
-        e["KNOWLEDGE_VAULT_REMOTE"] = "origin-non-esiste-in-sandbox"
+        e["KNOWLEDGE_VAULT_REMOTE"] = "origin-does-not-exist-in-sandbox"
         e["PATH"] = f"{self.bin_stubs}:{e.get('PATH', '')}"
         for key in (
             "TELEGRAM_BOT_TOKEN",
@@ -96,9 +96,9 @@ class Sandbox:
         return e
 
     def tree_snapshot(self, *, exclude_names: frozenset[str] = frozenset()) -> dict:
-        """Hash di ogni file/symlink sotto HOME, per confronti di idempotenza.
-        Esclude per nome (es. il file di log, che cambia sempre) non per path,
-        cosi' l'esclusione resta valida a prescindere dalla sub-directory."""
+        """Hash of every file/symlink under HOME, for idempotence comparisons.
+        Excludes by name (e.g. the log file, which always changes) not by
+        path, so the exclusion stays valid regardless of the sub-directory."""
         out = {}
         for p in sorted(self.home.rglob("*")):
             if p.name in exclude_names:
@@ -114,10 +114,10 @@ class Sandbox:
 
 
 def _make_bin_stubs(sandbox: Sandbox) -> None:
-    """Neutra systemctl e notify-send per i test:
-    - systemctl: per evitare ricaricamenti daemon-reload nel systemd VERO
-    - notify-send: per evitare notifiche desktop reali quando agent-healthcheck.sh
-      gira nella sandbox, fallisce (atteso) e cerca di avvisare."""
+    """Neutralizes systemctl and notify-send for the tests:
+    - systemctl: to avoid daemon-reload hitting the REAL systemd
+    - notify-send: to avoid real desktop notifications when agent-healthcheck.sh
+      runs in the sandbox, fails (expected) and tries to alert."""
     sandbox.bin_stubs.mkdir(parents=True, exist_ok=True)
     for cmd in ("systemctl", "notify-send"):
         stub = sandbox.bin_stubs / cmd
@@ -164,12 +164,12 @@ def _install_live_configs(sandbox: Sandbox) -> None:
 
 @pytest.fixture
 def sandbox(tmp_path, monkeypatch) -> Sandbox:
-    """Sandbox 'nuda': motore + fixture copiati, NESSUna live-config, NESSUN
-    runtime skill pre-creato. I singoli test aggiungono solo cio' che serve."""
+    """'Bare' sandbox: engine + fixtures copied, NO live-config, NO
+    pre-created runtime skill. Individual tests add only what they need."""
     home = tmp_path / "home"
     home.mkdir()
     (home / SENTINEL_NAME).write_text(
-        "Sandbox di test B1 — se vedi questo file in una HOME vera, qualcosa e' andato storto.\n"
+        "B1 test sandbox — if you're seeing this file in a real HOME, something went wrong.\n"
     )
     sb = Sandbox(home)
     _copy_engine_scripts(sb)
@@ -181,17 +181,18 @@ def sandbox(tmp_path, monkeypatch) -> Sandbox:
 
 @pytest.fixture
 def sandbox_with_live_configs(sandbox) -> Sandbox:
-    """Sandbox + le 4 config live sintetiche nei 4 stili reali, con drift
-    deliberato (server mancante, arg diverso, env superflua, server extra fuori
-    manifest) — usata dai test di render.py e dall'integrazione agent-sync."""
+    """Sandbox + the 4 synthetic live configs in the 4 real styles, with
+    deliberate drift (missing server, different arg, extra env, extra server
+    outside the manifest) — used by render.py's tests and the agent-sync
+    integration tests."""
     _install_live_configs(sandbox)
     return sandbox
 
 
 def load_render_module(sandbox: Sandbox):
-    """Importa render.py come modulo Python fresco (una copia di modulo per
-    test, cosi' i monkeypatch di uno non contaminano gli altri) e lo punta
-    alla sandbox: HOME e MANIFEST diventano quelli della sandbox."""
+    """Imports render.py as a fresh Python module (one module copy per
+    test, so one test's monkeypatches don't contaminate another's) and
+    points it at the sandbox: HOME and MANIFEST become the sandbox's own."""
     spec = importlib.util.spec_from_file_location(
         f"render_under_test_{id(sandbox)}", sandbox.mcp_dir / "render.py"
     )
@@ -203,8 +204,9 @@ def load_render_module(sandbox: Sandbox):
 
 
 def load_skills_sync_module(sandbox: Sandbox):
-    """Idem per skills-sync.py: HOME, HUB, RUNTIME, UL, MANIFEST puntati alla
-    sandbox (skills-sync deriva questi path da HOME e da __file__, non da env)."""
+    """Same for skills-sync.py: HOME, HUB, RUNTIME, UL, MANIFEST pointed at
+    the sandbox (skills-sync derives these paths from HOME and __file__,
+    not from env)."""
     spec = importlib.util.spec_from_file_location(
         f"skills_sync_under_test_{id(sandbox)}", sandbox.scripts_dir / "skills-sync.py"
     )
