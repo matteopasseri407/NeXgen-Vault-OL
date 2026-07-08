@@ -72,7 +72,19 @@ class Env:
         # Engine/data separation (Vault 2.1, Strangler Fig): defaults reproduce
         # the historical single-tree layout exactly, zero breakage.
         self.vault_data = Path(os.environ.get("AGENT_VAULT_DATA") or str(self.vault))
-        self.engine_root = Path(os.environ.get("AGENT_ENGINE_ROOT") or str(self.vault / "03-INFRA"))
+        self.local_bin = self.home / ".local" / "bin"
+        default_engine_root = self.vault / "03-INFRA"
+        # AGENT_ENGINE_ROOT wins when set. Otherwise, fall back to where
+        # ~/.local/bin/agent-sync ACTUALLY resolves right now, not silently
+        # to the vault default: a bare 'agent-sync apply/guard' run (no env
+        # var exported -- the normal way anyone would type it) must not
+        # revert an already-live cutover. Confirmed live: without this,
+        # utils()'s self-healing agent-now symlink flipped back to the
+        # vault's (now-deleted) copy on the very first plain invocation
+        # after the S3 cutover. engine-rollback.sh remains the one
+        # intentional way back: it swaps the symlink first, which this
+        # then reads as "already at the default".
+        self.engine_root = Path(os.environ.get("AGENT_ENGINE_ROOT") or self._persisted_engine_root(default_engine_root) or str(default_engine_root))
         self.engine_scripts = self.engine_root / "scripts"
         self.ul = self.engine_root / "agent-universal-layer"
         # Instance data (Matteo's own AGENTS.md, host-specific files): ALWAYS
@@ -80,12 +92,27 @@ class Env:
         # only ships the generic/universal AGENTS.md template; the personal
         # instance is data, never something the engine repo should serve.
         self.instance_ul = self.vault_data / "03-INFRA" / "agent-universal-layer"
+        # Vault-only infra scripts that never get published to the engine
+        # repo (sync-vault-from-oracle.sh, vault-push.sh, ...): always
+        # data-anchored, regardless of where the engine lives.
+        self.vault_scripts = self.vault_data / "03-INFRA" / "scripts"
         self.agents_hub = self.home / ".agents" / "skills"
-        self.local_bin = self.home / ".local" / "bin"
         self.log_dir = self.home / ".local" / "state"
         self.log_path = self.log_dir / "agent-sync.log"
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.agents_hub.mkdir(parents=True, exist_ok=True)
+
+    def _persisted_engine_root(self, default_engine_root: Path) -> str | None:
+        link = self.local_bin / "agent-sync"
+        if not link.is_symlink():
+            return None
+        try:
+            target = link.resolve()
+            default_resolved = default_engine_root.resolve()
+        except OSError:
+            return None
+        root = target.parent.parent          # .../<engine-root>/scripts/agent-sync.sh -> <engine-root>
+        return None if root == default_resolved else str(root)
 
     def log(self, message: str) -> None:
         with self.log_path.open("a", encoding="utf-8") as fh:
@@ -261,7 +288,7 @@ def pull(env: Env) -> None:
     if env.remote in ("local", "none"):
         env.log("pull: skipped (Local-Only mode)")
         return
-    helper = env.engine_scripts / "sync-vault-from-oracle.sh"
+    helper = env.vault_scripts / "sync-vault-from-oracle.sh"
     if not IS_WINDOWS and helper.is_file() and os.access(helper, os.X_OK):
         r = subprocess.run(["bash", str(helper)], capture_output=True, text=True)
         _append_log(env, r.stdout, r.stderr)
@@ -393,8 +420,8 @@ def utils(env: Env) -> None:
     env.local_bin.mkdir(parents=True, exist_ok=True)
     if not IS_WINDOWS:
         _link_util(env.engine_scripts / "agent-now.sh", env.local_bin / "agent-now", env, "agent-now")
-        _link_util(env.engine_scripts / "vault-push.sh", env.local_bin / "vault-push", env, "vault-push")
-        _link_util(env.engine_scripts / "vault-ocr-local.sh", env.local_bin / "vault-ocr-local", env, "vault-ocr-local")
+        _link_util(env.vault_scripts / "vault-push.sh", env.local_bin / "vault-push", env, "vault-push")
+        _link_util(env.vault_scripts / "vault-ocr-local.sh", env.local_bin / "vault-ocr-local", env, "vault-ocr-local")
         return
     src = env.engine_scripts / "agent-now.ps1"
     if not src.is_file():
@@ -447,42 +474,21 @@ def local_model_runtime(env: Env) -> None:
 # closes, per Fable's adapter list naming install_scheduler() as a normal
 # per-run step, not an opt-in one.
 
-def _persisted_engine_root(env: "Env") -> str | None:
-    """Fallback source of truth for AGENT_ENGINE_ROOT when this run's own
-    environment doesn't carry it: where ~/.local/bin/agent-sync currently
-    resolves to. Without this, any apply/guard invoked in a plain shell
-    (no env var exported) would silently rewrite the timer's unit file with
-    no Environment= line -- reverting a live cutover by accident, even
-    though the symlink itself (the real, durable cutover marker) never
-    changed. engine-rollback.sh is the one intentional way to undo a
-    cutover; it swaps the symlink back first, which this function then
-    picks up as "already at the default", the honest un-cut-over state."""
-    link = env.local_bin / "agent-sync"
-    if not link.is_symlink():
-        return None
-    try:
-        target = link.resolve()
-        default_root = (env.vault / "03-INFRA").resolve()
-    except OSError:
-        return None
-    root = target.parent.parent          # .../<engine-root>/scripts/agent-sync.sh -> <engine-root>
-    return None if root == default_root else str(root)
-
-
 def _systemd_service_content(env: "Env") -> str:
     """Carries AGENT_ENGINE_ROOT/AGENT_VAULT_DATA into the recurring timer.
     The timer re-reads its unit file, not a shell environment, so a one-off
     engine-cutover run (env var passed on the command line) makes the switch
-    persistent for every future guard run. AGENT_ENGINE_ROOT falls back to
-    the persisted symlink state (see _persisted_engine_root) when this run's
-    environment doesn't have it, so a plain unadorned 'agent-sync apply'
-    never silently reverts an already-live cutover."""
+    persistent for every future guard run. env.engine_root is already the
+    single source of truth (env var, else the persisted agent-sync symlink,
+    else the vault default -- see Env._persisted_engine_root), so a plain
+    unadorned 'agent-sync apply' never silently reverts an already-live
+    cutover here either."""
     lines = ["[Unit]",
              "Description=KnowledgeVault agent sync guard (pull + apply + healthcheck, no publish)",
              "", "[Service]", "Type=oneshot"]
-    engine_root = os.environ.get("AGENT_ENGINE_ROOT") or _persisted_engine_root(env)
-    if engine_root:
-        lines.append(f"Environment=AGENT_ENGINE_ROOT={engine_root}")
+    default_engine_root = (env.vault / "03-INFRA").resolve()
+    if env.engine_root.resolve() != default_engine_root:
+        lines.append(f"Environment=AGENT_ENGINE_ROOT={env.engine_root}")
     vault_data = os.environ.get("AGENT_VAULT_DATA")
     if vault_data:
         lines.append(f"Environment=AGENT_VAULT_DATA={vault_data}")
