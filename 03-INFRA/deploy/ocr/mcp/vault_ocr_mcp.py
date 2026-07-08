@@ -93,18 +93,35 @@ def request_json(url: str, timeout: int = 20) -> dict[str, Any]:
         return json.loads(response.read().decode("utf-8"))
 
 
-def multipart_request(path: Path, min_confidence: float, timeout: int = 120) -> dict[str, Any]:
-    data = path.read_bytes()
-    if len(data) > MAX_LOCAL_BYTES:
-        raise ValueError(f"image too large: {len(data)} bytes > {MAX_LOCAL_BYTES}")
+def read_local_image(path: Path) -> bytes:
+    """Checks size via stat() before touching file content: a naive
+    read_bytes()-then-check lets a 10GB file (or /dev/zero) get fully loaded
+    into RAM before the limit is even consulted, OOM-killing the MCP
+    process. stat() is O(1) regardless of file size."""
+    size = path.stat().st_size
+    if size > MAX_LOCAL_BYTES:
+        raise ValueError(f"image too large: {size} bytes > {MAX_LOCAL_BYTES}")
+    return path.read_bytes()
 
+
+def safe_multipart_filename(name: str) -> str:
+    """Escapes quotes/backslashes and strips CR/LF before embedding a
+    filename in a multipart Content-Disposition line: unescaped, a name
+    containing '"' breaks out of the filename attribute, and one containing
+    \\r\\n can inject extra multipart headers/parts into the request body."""
+    name = name.replace("\\", "\\\\").replace('"', '\\"')
+    return name.replace("\r", "").replace("\n", "")
+
+
+def multipart_request(path: Path, data: bytes, min_confidence: float, timeout: int = 120) -> dict[str, Any]:
     boundary = "----vault-ocr-" + uuid.uuid4().hex
     mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+    filename = safe_multipart_filename(path.name)
     parts: list[bytes] = []
     parts.append(
         (
             f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="file"; filename="{path.name}"\r\n'
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
             f"Content-Type: {mime}\r\n\r\n"
         ).encode("utf-8")
         + data
@@ -139,8 +156,9 @@ def extract_image(args: dict[str, Any]) -> dict[str, Any]:
     include_lines = bool(args.get("include_lines", False))
     if not path.is_file():
         raise FileNotFoundError(f"image_path not found: {path}")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    payload = multipart_request(path, min_conf)
+    data = read_local_image(path)
+    digest = hashlib.sha256(data).hexdigest()
+    payload = multipart_request(path, data, min_conf)
     lines = payload.get("lines", [])
     body = [
         f"# OCR Result: {path.name}",
@@ -175,7 +193,8 @@ def extract_batch(args: dict[str, Any]) -> dict[str, Any]:
     for item in paths:
         path = Path(str(item)).expanduser()
         try:
-            payload = multipart_request(path, min_conf)
+            data = read_local_image(path)
+            payload = multipart_request(path, data, min_conf)
             chunks.append(
                 "\n".join(
                     [

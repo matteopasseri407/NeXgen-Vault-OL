@@ -8,7 +8,7 @@
 # Transport (first available): direct messaging bot (env) > webhook > desktop notify-send > log.
 set -u
 
-VAULT="${KNOWLEDGE_VAULT_PATH:-$HOME/KnowledgeVault}"
+VAULT="${AGENT_VAULT_DATA:-${KNOWLEDGE_VAULT_PATH:-$HOME/KnowledgeVault}}"
 DOCTOR="$VAULT/03-INFRA/scripts/agent-doctor.sh"
 STATE_DIR="$HOME/.local/state"
 HB_FILE="$STATE_DIR/agent-healthcheck.state"

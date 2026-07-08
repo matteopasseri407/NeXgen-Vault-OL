@@ -13,11 +13,15 @@
 # Env: VAULT, GROOM_MODEL, GROOM_NOPUSH=1 (run without push, for observed runs)
 set -euo pipefail
 
-VAULT="${VAULT:-$HOME/KnowledgeVault}"
+VAULT="${AGENT_VAULT_DATA:-${VAULT:-$HOME/KnowledgeVault}}"
 PLAYBOOK="03-INFRA/vault-grooming-playbook.md"
 MODEL="${GROOM_MODEL:-claude-sonnet-5}"
 MODE="${1:-run}"
-LOG="${GROOM_LOG:-/tmp/vault-groom-$(date +%Y%m%d-%H%M%S).log}"
+# mktemp, not a predictable timestamp name: a plain "tee > $LOG" onto a
+# guessable /tmp path is a symlink race (CWE-59) -- anything running as this
+# same user could pre-create a symlink at that name pointing at, say,
+# ~/.bashrc, and tee would clobber it with permission-inherited overwrite.
+LOG="${GROOM_LOG:-$(mktemp --suffix=.log "/tmp/vault-groom-$(date +%Y%m%d-%H%M%S)-XXXXXX")}"
 
 cd "$VAULT"
 

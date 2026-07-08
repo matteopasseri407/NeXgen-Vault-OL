@@ -14,7 +14,7 @@
 #     - without files: commits whatever is already staged (the caller stages it)
 set -u
 
-VAULT="${KNOWLEDGE_VAULT_PATH:-$HOME/KnowledgeVault}"
+VAULT="${AGENT_VAULT_DATA:-${KNOWLEDGE_VAULT_PATH:-$HOME/KnowledgeVault}}"
 BRANCH="${KNOWLEDGE_VAULT_BRANCH:-main}"
 REMOTE="${KNOWLEDGE_VAULT_REMOTE:-origin}"
 
