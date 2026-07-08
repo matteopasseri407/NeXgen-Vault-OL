@@ -307,19 +307,8 @@ for s in "$HOME/.agents/skills"/*; do
   [ -L "$s" ] || [ -d "$s" ] || continue
   if [ -e "$s" ]; then n=$((n+1)); else broken="$broken $(basename "$s")"; fi
 done
-[ "${n:-0}" -gt 0 ] && ok "$n readable skills in ~/.agents/skills" || fail "no readable skill in ~/.agents/skills"
+[ "${n:-0}" -gt 0 ] && ok "$n readable skills in ~/.agents/skills" || warn "no skill in ~/.agents/skills (fresh install, or none configured in the manifest yet)"
 [ -n "$broken" ] && fail "BROKEN skills (self-loop/dangling symlink):$broken — fix with: python3 $ENGINE_ROOT/scripts/skills-sync.py --apply"
-# Runtimes must resolve the essential skills (from the manifest) down to a real SKILL.md.
-ess_ok=1
-for ess in humanizer knowledge-vault-hygiene frontend-design; do
-  for rt in "$HOME/.claude/skills" "$HOME/.codex/skills"; do
-    [ -d "$rt" ] || continue
-    if [ ! -f "$rt/$ess/SKILL.md" ]; then
-      ess_ok=0; fail "$rt/$ess: SKILL.md NOT readable (broken link or missing skill)"
-    fi
-  done
-done
-[ "$ess_ok" = 1 ] && ok "essential skills resolve to a real SKILL.md in claude+codex"
 
 sec "OpenCode config"
 if command -v node >/dev/null 2>&1 && [ -f "$OCJSON" ]; then

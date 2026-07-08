@@ -255,11 +255,16 @@ def main() -> int:
         write_index(apply=True)
         return 1 if FAILN else 0
 
-    if not MANIFEST.exists():
-        print(f"manifest not found: {MANIFEST}", file=sys.stderr)
-        return 2
-    data = yaml.safe_load(MANIFEST.read_text(encoding="utf-8")) or {}
-    skills = data.get("skills") or {}
+    # The manifest is vault DATA (a user's personal skill choices), not
+    # something the engine ships with. A fresh install has none yet -- that
+    # is a valid state, not an error: fall through with an empty set instead
+    # of exiting, so the rest of the sync (hub scan, INDEX.md) still runs.
+    if MANIFEST.exists():
+        data = yaml.safe_load(MANIFEST.read_text(encoding="utf-8")) or {}
+        skills = data.get("skills") or {}
+    else:
+        print(f"manifest not found: {MANIFEST} (fresh install or no skills configured yet -- skipping)", file=sys.stderr)
+        skills = {}
 
     mode = "APPLY" if apply else "DIFF (read-only)"
     print(f"\033[1m=== skills-sync [{mode}] · {platform.system()} ===\033[0m")

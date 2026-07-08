@@ -47,7 +47,7 @@ Salvali sotto `04-NOW/current-focus.md` o nella cartella appropriata (`01-NOTES/
 ### Step 4: Scaffold del Vault e Igiene
 
 Assicurati che esistano le cartelle base del Knowledge Vault: `01-NOTES`, `02-PROJECTS`, `04-NOW`, `99-INDEX`. Sono già presenti nel repo, ma verificane l'esistenza.
-Spiega all'utente che il Vault viene mantenuto pulito grazie allo script `vault-lifecycle-audit.py` e alla skill `knowledge-vault-hygiene` (già presente nell'installazione). Non dovrà fare pulizia a mano: saranno gli agenti a farla su sua richiesta.
+Spiega all'utente che il Vault può essere mantenuto pulito grazie allo script `vault-lifecycle-audit.py` e a una skill di igiene dedicata, se l'ha configurata nel proprio manifest (vedi Step 6): non è preinstallata, è una scelta dell'utente. Con quella skill attiva, non dovrà fare pulizia a mano: saranno gli agenti a farla su sua richiesta.
 Se l'utente deve gestire segreti (API key, token, credenziali dei tunnel), rimandalo all'appendice «Workflow dei Segreti» in fondo a questo file.
 
 ### Step 5: Prerequisiti di Sistema
@@ -82,9 +82,11 @@ File di destinazione per ogni CLI (corrispondono a quelli che il sync MULTI scri
 
 Per ogni server MCP nel manifest, l'agente risolve il comando concreto nel dialetto della CLI scelta (Claude, Codex, OpenCode e Antigravity usano formati diversi, vedi `03-INFRA/agent-universal-layer/mcp/render.py` come riferimento per i dialetti).
 
-Le skill di base sono listate in `skills.manifest.yaml`. Per installarle:
-- **Skill vendorizzate** (`origin: vault`, es. `knowledge-vault-hygiene`, `frontend-design`): copia la cartella da `03-INFRA/agent-universal-layer/skills/<name>/` direttamente nello store della CLI scelta.
-- **Skill third-party** (`origin: github`, es. `humanizer` → repo `blader/humanizer`): scaricala con `git clone https://github.com/<repo>.git` in una cartella temporanea e copia la cartella `<skill-name>` nello store della CLI scelta. Per `humanizer` nello specifico: `git clone https://github.com/blader/humanizer.git /tmp/humanizer && cp -r /tmp/humanizer ~/.agents/skills/humanizer` (poi collega in `~/.claude/skills/` o `~/.codex/skills/` come appropriato).
+Le skill sono dati personali dell'utente, non del motore: se le vuole, le sceglie lui, listandole nel proprio `skills.manifest.yaml` dentro il Vault (`03-INFRA/agent-universal-layer/skills/skills.manifest.yaml`). Su un'installazione nuova questo file potrebbe non esistere ancora o essere vuoto — è uno stato normale, non un errore: salta questo passo finché l'utente non decide di aggiungere skill.
+
+Se il manifest esiste, leggilo e installa ogni voce elencata secondo il suo `origin`, SENZA assumere nomi specifici (i nomi sono scelte dell'utente, non skill "di base" del framework):
+- **`origin: vault`** (vendorizzata, i byte vivono nel Vault stesso): copia la cartella da `03-INFRA/agent-universal-layer/skills/<name>/` (nel Vault dell'utente, non nel motore) direttamente nello store della CLI scelta.
+- **`origin: github`** (third-party, repo indicato nel campo `repo` della voce): scaricala con `git clone https://github.com/<repo>.git` in una cartella temporanea e copia la cartella indicata dal campo `path` della voce (default: la radice del repo) nello store della CLI scelta.
 
 In tutti i casi, solo la CLI scelta riceve la config. Niente script ricorrenti.
 
@@ -157,7 +159,7 @@ Save them under `04-NOW/current-focus.md` or in the appropriate folder (`01-NOTE
 ### Step 4: Vault scaffold and hygiene
 
 Make sure the base Knowledge Vault folders exist: `01-NOTES`, `02-PROJECTS`, `04-NOW`, `99-INDEX`. They are already in the repo, but verify their existence.
-Explain to the user that the Vault is kept clean thanks to the `vault-lifecycle-audit.py` script and the `knowledge-vault-hygiene` skill (already in the install). They will not have to clean up by hand: agents will do it on their request.
+Explain to the user that the Vault can be kept clean thanks to the `vault-lifecycle-audit.py` script and a dedicated hygiene skill, if they've configured one in their own manifest (see Step 6): it is not preinstalled, it's the user's own choice. With that skill active, they will not have to clean up by hand: agents will do it on their request.
 If the user handles secrets (API keys, tokens, tunnel credentials), point them to the "Secrets workflow" appendix at the end of this file.
 
 ### Step 5: System prerequisites
@@ -192,9 +194,11 @@ Destination file for each CLI (these match what the MULTI sync would write):
 
 For each MCP server in the manifest, the agent resolves the concrete command in the chosen CLI's dialect (Claude, Codex, OpenCode, and Antigravity use different formats, see `03-INFRA/agent-universal-layer/mcp/render.py` as a reference for the dialects).
 
-Base skills are listed in `skills.manifest.yaml`. To install them:
-- **Vendored skills** (`origin: vault`, e.g. `knowledge-vault-hygiene`, `frontend-design`): copy the folder from `03-INFRA/agent-universal-layer/skills/<name>/` directly into the chosen CLI's store.
-- **Third-party skills** (`origin: github`, e.g. `humanizer` → repo `blader/humanizer`): download with `git clone https://github.com/<repo>.git` into a temporary folder and copy the `<skill-name>` folder into the chosen CLI's store. For `humanizer` specifically: `git clone https://github.com/blader/humanizer.git /tmp/humanizer && cp -r /tmp/humanizer ~/.agents/skills/humanizer` (then link into `~/.claude/skills/` or `~/.codex/skills/` as appropriate).
+Skills are the user's own data, not the engine's: if they want any, they choose them, listed in their own `skills.manifest.yaml` inside the Vault (`03-INFRA/agent-universal-layer/skills/skills.manifest.yaml`). On a fresh install this file may not exist yet or may be empty -- that's a normal state, not an error: skip this step until the user decides to add skills.
+
+If the manifest exists, read it and install every entry per its `origin`, WITHOUT assuming specific names (names are the user's own choices, not "base" skills of the framework):
+- **`origin: vault`** (vendored, the bytes live in the Vault itself): copy the folder from `03-INFRA/agent-universal-layer/skills/<name>/` (in the user's Vault, not the engine) directly into the chosen CLI's store.
+- **`origin: github`** (third-party, repo given in the entry's `repo` field): download with `git clone https://github.com/<repo>.git` into a temporary folder and copy the folder given by the entry's `path` field (default: the repo root) into the chosen CLI's store.
 
 In every case, only the chosen CLI receives the config. No recurring scripts.
 
