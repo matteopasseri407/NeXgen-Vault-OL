@@ -58,7 +58,7 @@ Hand-patching per-CLI configs creates drift: one CLI behaves differently from an
 
 - **`agent-sync`** — reconciles live configs with the canonical sources on each machine.
 - **`agent-doctor`** — the single diagnostic: git state, MCP reachability, instruction drift, env tokens, skills, local worker. The only command to run by hand when something seems off.
-- **`agent-healthcheck`** — grouped health summary; sends an alert only on FAIL.
+- **healthcheck step (inside `agent-sync`)** — grouped health summary; sends an alert only on FAIL. Was a standalone `agent-healthcheck.sh`, folded into `agent_sync.py`.
 - **`vault-lifecycle-audit.py`** — read-only heat-map for vault grooming candidates.
 
 Full guardian map: `03-INFRA/agent-guardians-map.md`.

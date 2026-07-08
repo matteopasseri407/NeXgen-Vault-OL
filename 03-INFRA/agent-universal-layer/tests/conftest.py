@@ -116,8 +116,9 @@ class Sandbox:
 def _make_bin_stubs(sandbox: Sandbox) -> None:
     """Neutralizes systemctl and notify-send for the tests:
     - systemctl: to avoid daemon-reload hitting the REAL systemd
-    - notify-send: to avoid real desktop notifications when agent-healthcheck.sh
-      runs in the sandbox, fails (expected) and tries to alert."""
+    - notify-send: to avoid real desktop notifications when the
+      _send_healthcheck step (agent_sync.py) runs in the sandbox, fails
+      (expected) and tries to alert."""
     sandbox.bin_stubs.mkdir(parents=True, exist_ok=True)
     for cmd in ("systemctl", "notify-send"):
         stub = sandbox.bin_stubs / cmd
