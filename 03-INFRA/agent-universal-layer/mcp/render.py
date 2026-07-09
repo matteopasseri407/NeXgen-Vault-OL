@@ -256,6 +256,24 @@ def _value_span(text, brace_idx):
         i += 1
     raise ValueError("closing brace not found")
 
+def _insert_new_top_level_key(raw, key, indent_exact):
+    """Inserts `"key": {}` as a new top-level entry in a JSON object's text,
+    right after the opening brace, preserving everything else untouched.
+    Only used when the key is entirely absent (fresh install, e.g. a CLI
+    launched for the first time with zero MCP servers configured): never to
+    replace an existing key sitting at an unexpected indent, which stays a
+    STOP (found in a cross-vendor audit, 2026-07-09: without this, a brand
+    new config file with no "mcpServers" section at all blocked sync forever
+    with no way out except a manual edit)."""
+    open_idx = raw.index("{")
+    close_idx = _value_span(raw, open_idx) - 1
+    body = raw[open_idx + 1:close_idx]
+    m = re.search(r'\n(\s+)\S', body)
+    indent = indent_exact if indent_exact is not None else (m.group(1) if m else "  ")
+    entry = f'{indent}{json.dumps(key)}: {{}}'
+    new_body = ("\n" + entry + "\n") if not body.strip() else ("\n" + entry + "," + body)
+    return raw[:open_idx + 1] + new_body + raw[close_idx:]
+
 # ---- generic surgical writer for JSON files -----------------------------
 
 def _prune_backups(path, keep=3):
@@ -300,7 +318,17 @@ def write_json_section(path, key, new_section, live_section, serialize, indent_e
     ind_pat = re.escape(indent_exact) if indent_exact is not None else r'[ \t]*'
     m = re.search(rf'(?m)^({ind_pat}){re.escape(json.dumps(key))}[ \t]*:[ \t]*', raw)
     if not m or raw[m.end():m.end() + 1] != "{":
-        print(f">>> STOP: can't find the {json.dumps(key)} section at the expected indent."); return 2
+        if key in live:
+            print(f">>> STOP: can't find the {json.dumps(key)} section at the expected indent."); return 2
+        # Fresh install: the key is entirely absent, not just at an
+        # unexpected indent. Insert an empty placeholder and let the normal
+        # surgical-replace logic below fill it in.
+        raw = _insert_new_top_level_key(raw, key, indent_exact)
+        live = json.loads(raw)
+        m = re.search(rf'(?m)^({ind_pat}){re.escape(json.dumps(key))}[ \t]*:[ \t]*', raw)
+        if not m or raw[m.end():m.end() + 1] != "{":
+            print(f">>> STOP: inserted the {json.dumps(key)} placeholder but can't find it again (unexpected file shape)."); return 2
+        print(f">>> {json.dumps(key)} section was missing entirely (fresh install): inserted an empty placeholder.")
     indent = m.group(1)
     end = _value_span(raw, m.end())
     inner = serialize(new_section)

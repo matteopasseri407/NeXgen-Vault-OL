@@ -8,7 +8,7 @@
   file. Claude only uses a lightweight pointer to the canonical file to avoid
   duplication with OpenCode when both files are loaded in the same context.
 #>
-param([switch]$Summary)
+param([switch]$Summary, [switch]$Strict)
 
 $ErrorActionPreference = "Continue"
 $HomeDir = [Environment]::GetFolderPath("UserProfile")
@@ -153,6 +153,73 @@ if ((Get-Command "python" -ErrorAction SilentlyContinue) -and (Test-Path -Litera
   }
 } else {
   warn "python or render.py not found, skipping MCP drift check"
+}
+
+if ($Strict) {
+  sec "CLI consumer conformance (--strict)"
+  # Found missing entirely in a cross-vendor audit, 2026-07-09: bash had this
+  # since before, .ps1 never got a twin, so Windows never ran the real
+  # consumer checks (only the structural ones above). Ported here as closely
+  # as possible without a live Windows machine to verify against -- the OCR
+  # JSONL/Content-Length framing check from agent-doctor.sh is intentionally
+  # NOT ported: too easy to get subtly wrong blind, flag it in the backlog
+  # instead of shipping an unverified process-framing test.
+  $AgSrc = Join-Path $HomeDir ".gemini\antigravity\mcp_config.json"
+  $AgGlobal = Join-Path $HomeDir ".gemini\config\mcp_config.json"
+  if ((Test-Path -LiteralPath $AgGlobal) -and (Test-Path -LiteralPath $AgSrc) -and ((hashOf $AgGlobal) -eq (hashOf $AgSrc))) {
+    ok "Antigravity global MCP path -> generated source"
+  } else {
+    bad "Antigravity global MCP path does NOT point to the generated source ($AgGlobal)"
+  }
+  if ((Test-Path -LiteralPath $AgGlobal) -and (Get-Item -LiteralPath $AgGlobal).Length -gt 0) {
+    ok "Antigravity global mcp_config.json not empty"
+  } else {
+    bad "Antigravity global mcp_config.json empty or missing"
+  }
+  $expectedMcp = @("firecrawl", "n8n-mcp", "vault-library", "vault-ocr")
+  if (Test-Path -LiteralPath $AgGlobal) {
+    try {
+      $agJson = Get-Content -Raw -LiteralPath $AgGlobal | ConvertFrom-Json
+      $gotKeys = @($agJson.mcpServers.PSObject.Properties.Name)
+      $agMissing = @($expectedMcp | Where-Object { $gotKeys -notcontains $_ })
+      if ($agMissing.Count -eq 0) { ok "Antigravity global contains the core MCP servers" }
+      else { bad "Antigravity global is missing core MCP servers: $($agMissing -join ', ')" }
+    } catch { bad "Antigravity global mcp_config.json: invalid JSON" }
+  }
+  # Real behavioral probe: agy has no deterministic "mcp list" subcommand
+  # like opencode, so the only real check is asking the model itself.
+  if (Get-Command agy -ErrorAction SilentlyContinue) {
+    $agPrompt = "Elenca SOLO i nomi dei server MCP disponibili in questa sessione, una riga per server, NESSUN dettaglio sui singoli tool e NESSUNA invocazione."
+    $agJob = Start-Job -ScriptBlock { param($p) & agy --print $p --model "Gemini 3.5 Flash (Medium)" --sandbox 2>&1 } -ArgumentList $agPrompt
+    if (Wait-Job $agJob -Timeout 45) {
+      $agProbeOut = (Receive-Job $agJob | Out-String)
+      Remove-Job $agJob -Force
+      $agProbeMissing = @($expectedMcp | Where-Object { $agProbeOut -notmatch [regex]::Escape($_) })
+      if ($agProbeMissing.Count -eq 0) { ok "Antigravity behavioral probe confirms the core MCP servers are visible" }
+      else { bad "Antigravity behavioral probe does not confirm: $($agProbeMissing -join ', ')" }
+    } else {
+      Stop-Job $agJob; Remove-Job $agJob -Force
+      bad "Antigravity behavioral probe (agy --print) timed out"
+    }
+  } else {
+    warn "agy not in PATH, skipping Antigravity behavioral probe"
+  }
+  if (Get-Command opencode -ErrorAction SilentlyContinue) {
+    $ocJob = Start-Job -ScriptBlock { & opencode mcp list 2>&1 }
+    if (Wait-Job $ocJob -Timeout 25) {
+      $ocOut = (Receive-Job $ocJob | Out-String)
+      Remove-Job $ocJob -Force
+      $ocMissing = @($expectedMcp | Where-Object { $ocOut -notmatch "(?i)$([regex]::Escape($_)).*connected" })
+      if ($ocMissing.Count -eq 0) { ok "OpenCode mcp list shows the core servers connected" }
+      else { bad "OpenCode mcp list does not confirm: $($ocMissing -join ', ')" }
+    } else {
+      Stop-Job $ocJob; Remove-Job $ocJob -Force
+      bad "OpenCode mcp list timed out during strict check"
+    }
+  } else {
+    warn "opencode not in PATH, skipping OpenCode consumer test"
+  }
+  warn "OCR JSONL/Content-Length framing check not ported to Windows yet (see agentic-layer-concept-map.md backlog)"
 }
 
 sec "Skills"

@@ -217,6 +217,33 @@ PY
     [ -z "$ag_missing" ] && ok "Antigravity global contains the core MCP servers" || fail "Antigravity global is missing core MCP servers: $ag_missing"
   fi
 
+  # Real behavioral probe (found missing in a cross-vendor audit, 2026-07-09:
+  # the checks above only prove the config FILE is well-formed, not that the
+  # CLI actually honors it — same false-positive class as the old dead
+  # ANTIGRAVITY.md symlink). agy has no deterministic "mcp list" subcommand
+  # like opencode, so the only real probe is asking the model itself: slower
+  # by design, not a bug.
+  if command -v agy >/dev/null 2>&1; then
+    ag_probe_tmp="$(mktemp)"
+    timeout -k 5s 45s agy --print "Elenca SOLO i nomi dei server MCP disponibili in questa sessione, una riga per server, NESSUN dettaglio sui singoli tool e NESSUNA invocazione." --model "Gemini 3.5 Flash (Medium)" --sandbox >"$ag_probe_tmp" 2>&1
+    ag_probe_rc=$?
+    ag_probe_out="$(cat "$ag_probe_tmp" 2>/dev/null)"
+    rm -f "$ag_probe_tmp"
+    ag_probe_missing=""
+    for srv in firecrawl n8n-mcp vault-library vault-ocr; do
+      printf '%s\n' "$ag_probe_out" | grep -Fqi "$srv" || ag_probe_missing="${ag_probe_missing}${ag_probe_missing:+, }$srv"
+    done
+    if [ "$ag_probe_rc" = 124 ] || [ "$ag_probe_rc" = 137 ]; then
+      fail "Antigravity behavioral probe (agy --print) timed out"
+    elif [ -z "$ag_probe_missing" ]; then
+      ok "Antigravity behavioral probe confirms the core MCP servers are visible"
+    else
+      fail "Antigravity behavioral probe does not confirm: $ag_probe_missing"
+    fi
+  else
+    warn "agy not in PATH, skipping Antigravity behavioral probe"
+  fi
+
   if command -v opencode >/dev/null 2>&1; then
     oc_tmp="$(mktemp)"
     if command -v setsid >/dev/null 2>&1; then

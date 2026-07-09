@@ -206,6 +206,21 @@ def make_link(src: Path, dst: Path, *, is_dir: bool) -> bool:
             return False
         if not is_dir and _same_file_content(src, dst):
             return False
+        # Content differs and this isn't a link: on Windows this branch is
+        # reached when a previous run fell back to a real copy (no
+        # symlink/junction privilege) and the content has since diverged --
+        # possibly a local edit, not necessarily just staleness. Back it up
+        # before removing instead of destroying it silently (found in a
+        # cross-vendor audit, 2026-07-09; not verified live on Windows, see
+        # agentic-layer-concept-map.md backlog).
+        bak = dst.with_name(dst.name + ".local-edit.bak-" + time.strftime("%Y%m%d-%H%M%S"))
+        try:
+            if dst.is_dir():
+                shutil.copytree(dst, bak)
+            else:
+                shutil.copy2(dst, bak)
+        except OSError:
+            pass
     _remove_path(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
     if not IS_WINDOWS:
@@ -238,6 +253,15 @@ def resolve_cmd(name: str) -> str | None:
 
 
 def _process_running(name: str) -> bool:
+    # RISK (flagged in a cross-vendor audit, 2026-07-09, NOT verified live on
+    # Windows -- needs physical access, see agentic-layer-concept-map.md
+    # backlog): if the npm-installed "claude" CLI runs as a node.exe wrapper
+    # rather than a standalone claude.exe on Windows, `tasklist /FI
+    # "IMAGENAME eq claude.exe"` never matches, and the caller (which skips
+    # rewriting .claude.json while Claude is "running") always sees it as
+    # closed -- rewriting live under it. Confirm the real process name on the
+    # Windows machine before trusting this; do not "fix" it blind, a wrong
+    # guess (e.g. matching any node.exe) would create a worse false positive.
     try:
         if not IS_WINDOWS:
             r = subprocess.run(["pgrep", "-x", name], capture_output=True)
