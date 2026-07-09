@@ -28,12 +28,32 @@
 #     vendor: <vendor del modello, es. openai/anthropic/deepseek/zhipu/...>
 #     cli: <CLI locale che lo invoca in headless, es. opencode/agy/codex>
 #     model: <identificatore modello nel formato atteso dalla CLI>
+#     quota_pool: <pool reale condiviso, es. opencode-go>  # opzionale ma consigliato
 #     zero_retention: true|false   # garanzia contrattuale di non-training,
 #                                  # da verificare con fonte primaria
+#
+# Schema sequence per il mode `relay`:
+# - i ruoli NON vivono dentro i seat;
+# - la sequence dichiara ruolo -> seat primario e fallback ammessi;
+# - i fallback validi per un ruolo sono SOLO quelli dichiarati qui.
+#
+# Puoi anche passare una sequence inline:
+#   council relay "brief" --sequence architect=seat-a|seat-b,builder=seat-c,reviewer=seat-d
+# oppure definire sequence nominate:
+#
+# sequences:
+#   default:
+#     - role: architect
+#       seats: [seat-a, seat-b]  # seat-b e' fallback esplicito, non improvvisato
+#     - role: builder
+#       seat: seat-c
+#     - role: reviewer
+#       seat: seat-d
 
 seats:
   esempio-seat:
     vendor: nome-vendor
     cli: nome-cli
     model: provider/nome-modello
+    quota_pool: nome-cli-provider
     zero_retention: false
