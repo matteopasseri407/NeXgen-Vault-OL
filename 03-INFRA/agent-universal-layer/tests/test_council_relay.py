@@ -86,8 +86,8 @@ def test_relay_runs_declared_sequence_and_writes_stage_files(monkeypatch, tmp_pa
     prompts = []
     monkeypatch.setattr(council, "egress_gate", lambda text: prompts.append(text))
 
-    def fake_run_seat(model, prompt, session_dir):
-        return f"Risposta da {model}\nVERDICT: APPROVE\n", {}
+    def fake_run_seat(seat, prompt, session_dir):
+        return f"Risposta da {seat['model']}\nVERDICT: APPROVE\n", {}
 
     monkeypatch.setattr(council, "run_seat", fake_run_seat)
 
@@ -132,9 +132,9 @@ def test_relay_fallback_moves_to_different_quota_pool(monkeypatch, tmp_path, cap
     monkeypatch.setattr(council, "egress_gate", lambda text: None)
     attempts = []
 
-    def fake_run_seat(model, prompt, session_dir):
-        attempts.append(model)
-        if model == "opencode-go/primary":
+    def fake_run_seat(seat, prompt, session_dir):
+        attempts.append(seat["model"])
+        if seat["model"] == "opencode-go/primary":
             raise council.SeatRunError("zero output", "no_output_timeout")
         return "Fallback riuscito\nVERDICT: APPROVE\n", {}
 

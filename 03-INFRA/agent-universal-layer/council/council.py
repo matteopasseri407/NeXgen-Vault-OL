@@ -7,7 +7,7 @@ A2: tre mode (brainstorm multi-round, challenge, code-review), prompt di
 ruolo dedicati, parsing VERDICT per ogni round.
 """
 from __future__ import annotations
-import argparse, importlib.util, json, os, queue, re, shutil, subprocess, sys, threading, time
+import argparse, importlib.util, json, os, queue, re, shutil, subprocess, sys, tempfile, threading, time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +16,7 @@ import yaml
 
 VERDICT_RE = re.compile(r"(?i)verdict\s*:\s*(APPROVE|REVISE|REJECT)\b")
 REQUIRED_SEAT_FIELDS = ("vendor", "cli", "model")
+SUPPORTED_CLIS = ("opencode", "agy", "codex")
 
 ENGINE_ROOT = Path(__file__).resolve().parent
 LEAK_SCAN_DIR = ENGINE_ROOT.parent / "leak-scan"
@@ -86,6 +87,11 @@ def load_seats() -> dict:
         missing = [f for f in REQUIRED_SEAT_FIELDS if f not in seat]
         if missing:
             sys.exit(f"[council] seat '{name}' in {SEATS_PATH} incompleto: mancano {', '.join(missing)}.")
+        if seat["cli"] not in SUPPORTED_CLIS:
+            sys.exit(
+                f"[council] seat '{name}' in {SEATS_PATH}: cli '{seat['cli']}' non supportata "
+                f"(attese: {', '.join(SUPPORTED_CLIS)})."
+            )
     return seats
 
 
@@ -355,11 +361,23 @@ def slugify(text: str) -> str:
     return slug or "session"
 
 
+MAX_CONTEXT_FILE_BYTES = 2_000_000  # ~2MB: generoso per un brief/diff di testo, non per un binario
+
+
 def _read_or_exit(path_str: str, label: str) -> str:
     path = Path(path_str)
     if not path.is_file():
         sys.exit(f"[council] file {label} non trovato: {path_str}")
-    return path.read_text(encoding="utf-8")
+    size = path.stat().st_size
+    if size > MAX_CONTEXT_FILE_BYTES:
+        sys.exit(
+            f"[council] file {label} troppo grande ({size} byte, limite {MAX_CONTEXT_FILE_BYTES}): "
+            "riduci il contesto prima di allegarlo."
+        )
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        sys.exit(f"[council] file {label} non e' testo UTF-8 valido (binario?): {path_str}")
 
 
 def build_brief(question: str | None, context_path: str | None, diff_path: str | None = None) -> str:
@@ -378,10 +396,22 @@ def build_brief(question: str | None, context_path: str | None, diff_path: str |
 
 
 def new_session_dir(label: str) -> Path:
+    """mkdir SENZA exist_ok: due invocazioni con lo stesso label nello stesso
+    secondo (timestamp con risoluzione al secondo) non devono mai condividere
+    silenziosamente una cartella e sovrascriversi i file a vicenda -- su
+    collisione si riprova con un suffisso random finche' non se ne trova una
+    libera (verificato dal vivo: senza questo, due sessioni ravvicinate con lo
+    stesso label finiscono nella stessa directory)."""
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    session_dir = SESSIONS_DIR / f"council-{slugify(label)}-{timestamp}"
-    session_dir.mkdir(parents=True, exist_ok=True)
-    return session_dir
+    base_name = f"council-{slugify(label)}-{timestamp}"
+    session_dir = SESSIONS_DIR / base_name
+    while True:
+        try:
+            session_dir.mkdir(parents=True, exist_ok=False)
+            return session_dir
+        except FileExistsError:
+            session_dir = SESSIONS_DIR / f"{base_name}-{os.urandom(3).hex()}"
 
 
 def _drain_lines(stream, line_queue: "queue.Queue[str | None]") -> None:
@@ -395,82 +425,138 @@ def _drain_text(stream, sink: list[str]) -> None:
         sink.append(line)
 
 
-def run_seat(model: str, prompt: str, session_dir: Path) -> tuple[str, dict]:
+def _build_seat_command(seat: dict, prompt: str, session_dir: Path) -> tuple[list[str], Path | None]:
+    """Costruisce l'argv per la CLI dichiarata dal seat. Ritorna anche il path del
+    file di output se quella CLI scrive la risposta su file invece che su stdout
+    (piu' robusto di un parser di banner/log: codex exec stampa anche header,
+    warning e progress su stdout, -o isola il solo messaggio finale)."""
+    cli = seat["cli"]
+    model = seat["model"]
+    if cli == "opencode":
+        return (
+            ["opencode", "run", prompt, "-m", model, "--format", "json", "--dir", str(session_dir)],
+            None,
+        )
+    if cli == "agy":
+        # Verificato dal vivo 2026-07-09: `agy --print <prompt> --model <m> --sandbox`
+        # stampa SOLO la risposta su stdout (nessun banner, nessun JSON), exit 0.
+        # --sandbox = restrizioni terminale, mai --dangerously-skip-permissions
+        # (coerente con "consulenti senza mani": qualunque tool richieda conferma
+        # interattiva non ha modo di ottenerla in modalita' non interattiva).
+        return (["agy", "--print", prompt, "--model", model, "--sandbox"], None)
+    if cli == "codex":
+        # Verificato dal vivo 2026-07-09: senza -o, stdout include banner/warning/
+        # progress oltre alla risposta. -s read-only = stessa sandbox gia' validata
+        # in A0, nessun accesso in scrittura per il seat.
+        fd, tmp_name = tempfile.mkstemp(prefix="council-codex-", suffix=".txt")
+        os.close(fd)
+        output_file = Path(tmp_name)
+        return (
+            ["codex", "exec", prompt, "-m", model, "-s", "read-only", "-o", str(output_file)],
+            output_file,
+        )
+    raise SeatRunError(
+        f"[council] cli '{cli}' non supportata (attese: {', '.join(SUPPORTED_CLIS)}).", "unsupported_cli"
+    )
+
+
+def run_seat(seat: dict, prompt: str, session_dir: Path) -> tuple[str, dict]:
     """Legge stdout in streaming (non subprocess.run in blocco): un timeout senza
     aver mai ricevuto una riga e' un segnale diagnostico diverso da un timeout a
     meta' risposta (es. quota abbonamento esaurita o blocco lato provider senza
     errore visibile lato client, verificato dal vivo su un seat a quota esaurita:
-    TimeoutExpired non porta output parziale, va letto mentre arriva)."""
+    TimeoutExpired non porta output parziale, va letto mentre arriva). Il parsing
+    dell'output varia per CLI: opencode emette eventi JSON (`--format json`), le
+    altre CLI supportate stampano testo semplice."""
+    model = seat["model"]
+    cli = seat["cli"]
+    argv, output_file = _build_seat_command(seat, prompt, session_dir)
     try:
         proc = subprocess.Popen(
-            ["opencode", "run", prompt, "-m", model, "--format", "json", "--dir", str(session_dir)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            argv,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True,
         )
     except OSError as e:
         raise SeatRunError(f"[council] impossibile invocare il seat (brief troppo grande per la riga di comando?): {e}", "invocation")
 
-    line_queue: "queue.Queue[str | None]" = queue.Queue()
-    stderr_lines: list[str] = []
-    stdout_reader = threading.Thread(target=_drain_lines, args=(proc.stdout, line_queue), daemon=True)
-    stderr_reader = threading.Thread(target=_drain_text, args=(proc.stderr, stderr_lines), daemon=True)
-    stdout_reader.start()
-    stderr_reader.start()
+    try:
+        line_queue: "queue.Queue[str | None]" = queue.Queue()
+        stderr_lines: list[str] = []
+        stdout_reader = threading.Thread(target=_drain_lines, args=(proc.stdout, line_queue), daemon=True)
+        stderr_reader = threading.Thread(target=_drain_text, args=(proc.stderr, stderr_lines), daemon=True)
+        stdout_reader.start()
+        stderr_reader.start()
 
-    text_chunks = []
-    usage = {}
-    got_any_line = False
-    deadline = time.monotonic() + SEAT_TIMEOUT_SECONDS
+        text_chunks = []
+        usage = {}
+        got_any_line = False
+        deadline = time.monotonic() + SEAT_TIMEOUT_SECONDS
 
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            proc.kill()
-            proc.wait()
-            if not got_any_line:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                proc.kill()
+                proc.wait()
+                if not got_any_line:
+                    raise SeatRunError(
+                        f"[council] il seat '{model}' non ha risposto entro {SEAT_TIMEOUT_SECONDS}s "
+                        "senza produrre alcun output: probabile quota abbonamento esaurita o blocco "
+                        "lato provider (nessun errore diagnosticabile dal client). Verifica manualmente "
+                        "prima di riprovare.",
+                        "no_output_timeout",
+                    )
                 raise SeatRunError(
-                    f"[council] il seat '{model}' non ha risposto entro {SEAT_TIMEOUT_SECONDS}s "
-                    "senza produrre alcun output: probabile quota abbonamento esaurita o blocco "
-                    "lato provider (nessun errore diagnosticabile dal client). Verifica manualmente "
-                    "prima di riprovare.",
-                    "no_output_timeout",
+                    f"[council] il seat '{model}' ha iniziato a rispondere ma non ha finito entro "
+                    f"{SEAT_TIMEOUT_SECONDS}s: timeout a meta' risposta, nessun verdetto per questo round.",
+                    "partial_timeout",
                 )
-            raise SeatRunError(
-                f"[council] il seat '{model}' ha iniziato a rispondere ma non ha finito entro "
-                f"{SEAT_TIMEOUT_SECONDS}s: timeout a meta' risposta, nessun verdetto per questo round.",
-                "partial_timeout",
-            )
-        try:
-            line = line_queue.get(timeout=remaining)
-        except queue.Empty:
-            continue
-        if line is None:
-            break
-        got_any_line = True
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if event.get("type") == "error":
-            proc.kill()
-            proc.wait()
-            raise SeatRunError(f"[council] errore dal seat: {event.get('error')}", "seat_error")
-        part = event.get("part") or {}
-        if event.get("type") == "text" and "text" in part:
-            text_chunks.append(part["text"])
-        if event.get("type") == "step_finish":
-            usage = {"tokens": part.get("tokens"), "cost": part.get("cost")}
+            try:
+                line = line_queue.get(timeout=remaining)
+            except queue.Empty:
+                continue
+            if line is None:
+                break
+            got_any_line = True
+            if cli == "opencode":
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    event = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "error":
+                    proc.kill()
+                    proc.wait()
+                    raise SeatRunError(f"[council] errore dal seat: {event.get('error')}", "seat_error")
+                part = event.get("part") or {}
+                if event.get("type") == "text" and "text" in part:
+                    text_chunks.append(part["text"])
+                if event.get("type") == "step_finish":
+                    usage = {"tokens": part.get("tokens"), "cost": part.get("cost")}
+            else:
+                # agy/codex: nessun evento strutturato, ogni riga e' testo grezzo.
+                # Per codex la risposta autorevole arriva dopo da output_file;
+                # qui serve solo per la diagnosi di liveness (got_any_line).
+                text_chunks.append(line)
 
-    stdout_reader.join(timeout=5)
-    stderr_reader.join(timeout=5)
-    returncode = proc.wait()
-    if returncode != 0:
-        raise SeatRunError(f"[council] il seat non ha risposto (exit {returncode}):\n{''.join(stderr_lines)}", "process_error")
-    if not text_chunks:
-        raise SeatRunError("[council] il seat ha risposto ma senza testo utilizzabile (output vuoto).", "empty_response")
-    return "".join(text_chunks), usage
+        stdout_reader.join(timeout=5)
+        stderr_reader.join(timeout=5)
+        returncode = proc.wait()
+        if returncode != 0:
+            raise SeatRunError(f"[council] il seat non ha risposto (exit {returncode}):\n{''.join(stderr_lines)}", "process_error")
+
+        if output_file is not None:
+            if not output_file.is_file() or not output_file.read_text(encoding="utf-8").strip():
+                raise SeatRunError("[council] il seat ha risposto ma senza testo utilizzabile (output vuoto).", "empty_response")
+            return output_file.read_text(encoding="utf-8"), usage
+
+        if not text_chunks:
+            raise SeatRunError("[council] il seat ha risposto ma senza testo utilizzabile (output vuoto).", "empty_response")
+        return "".join(text_chunks), usage
+    finally:
+        if output_file is not None:
+            output_file.unlink(missing_ok=True)
 
 
 def extract_verdict(text: str) -> str:
@@ -488,7 +574,7 @@ def run_rounds(
     for r in range(1, rounds + 1):
         print(f"[council] round {r}/{rounds} — seat: {seat_name} ({seat['model']})")
         try:
-            response, _usage = run_seat(seat["model"], prompt, session_dir)
+            response, _usage = run_seat(seat, prompt, session_dir)
         except SeatRunError as e:
             sys.exit(str(e))
         seat_file = session_dir / f"{r:02d}-{seat_name}-{mode_label}-r{r}.md"
@@ -583,7 +669,7 @@ def _run_relay_stage(
             f"seat: {chosen_name} ({seat['model']}, pool {pool})"
         )
         try:
-            response, _usage = run_seat(seat["model"], prompt, session_dir)
+            response, _usage = run_seat(seat, prompt, session_dir)
         except SeatRunError as e:
             attempted.add(chosen_name)
             if e.kind != "no_output_timeout":

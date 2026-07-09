@@ -98,6 +98,8 @@ Questo script reconcile la configurazione dei CLI con le fonti canoniche del vau
 
 Attendi la conferma dell'utente che il comando sia andato a buon fine. Se ci sono errori, suggerisci di lanciare `agent-doctor` (in MULTI) per la diagnostica. In MINIMAL la diagnostica è visiva: verifica che la CLI scelta carichi AGENTS.md, monti i server MCP, e veda le skill.
 
+Menziona il Consiglio AI come espansione opzionale, a prescindere dal profilo: se l'utente usa già più di una CLI agentica, `council.py` può convocarle come consulenti per brainstorming, sfidare un piano, o code review incrociata. È inerte senza configurazione — rimanda a `docs/council.md` solo se l'utente è interessato, non configurarlo di tua iniziativa.
+
 ### Step 7: (Solo Cloud-Server) Deploy dello stack remoto
 
 Se l'utente ha scelto la modalità Cloud-Server, spiega che dovrà deployare lo stack self-hosted (n8n, Firecrawl, OCR) sul suo VPS. I docker-compose e il bootstrap sono in `03-INFRA/deploy/`: clona il repo sul VPS, copia `.env.example` in `.env`, riempi i segreti, e lancia `bash 03-INFRA/deploy/bootstrap-vps.sh`. Rimanda a `03-INFRA/deploy/README.md` e `03-INFRA/remote-automation.md` per i dettagli.
@@ -209,6 +211,8 @@ In every case, only the chosen CLI receives the config. No recurring scripts.
 This script reconciles the CLI configuration with the vault's canonical sources, installs MCP servers, and propagates skills to every runtime.
 
 Wait for the user's confirmation that the command succeeded. If there are errors, suggest running `agent-doctor` (in MULTI) for diagnostics. In MINIMAL, diagnostics are visual: verify that the chosen CLI loads AGENTS.md, mounts the MCP servers, and sees the skills.
+
+Mention the AI Council as an optional expansion, regardless of profile: if the user runs more than one agentic CLI already, `council.py` can convene them as advisors for brainstorming, challenging a plan, or cross-vendor code review. It is inert with no setup — point to `docs/council.md` only if the user is interested, don't set it up unprompted.
 
 ### Step 7: (Cloud-Server only) Remote stack deployment
 

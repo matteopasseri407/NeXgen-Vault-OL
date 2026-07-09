@@ -120,7 +120,7 @@ You don't need to fill out configuration files manually.
 **Why is this Alpha?**
 Linux is the daily-driven platform and the most tested, but the framework is still in Alpha because cross-platform support and core orchestrators are actively settling. Specifically:
 - **Windows Support:** While the core provisioner was just unified into a single Python script (`agent_sync.py`), the MCP config generator (`render.py`) still lacks a Windows dialect, and some runtime paths are inferred rather than confirmed live.
-- **AI Council:** The new deterministic orchestrator (`council.py`) is functional but still has known edge cases (e.g., crashing on large binary files or race conditions in session folders) that need ironing out.
+- **AI Council:** The deterministic orchestrator (`council.py`) supports `opencode`, `agy`, and `codex` seats. Automated regression tests currently cover only the `relay` mode; `brainstorm`/`challenge`/`code-review` are verified live but not yet under CI.
 
 MINIMAL profile is the safer starting point on Windows today. macOS follows the Linux code paths but has seen less real-world use.
 
@@ -255,7 +255,7 @@ Non devi compilare i file di configurazione a mano.
 **Perché siamo in Alpha?**
 Linux è la piattaforma usata quotidianamente e la più testata, ma il framework è in Alpha perché il supporto cross-platform e gli orchestratori principali si stanno ancora stabilizzando. Nello specifico:
 - **Supporto Windows:** Anche se il provisioner principale è appena stato unificato in uno script Python (`agent_sync.py`), il generatore di config MCP (`render.py`) non ha ancora un dialetto Windows, e alcuni percorsi runtime sono dedotti per analogia con Linux piuttosto che confermati dal vivo.
-- **Consiglio AI:** Il nuovo orchestratore deterministico (`council.py`) funziona ma presenta ancora degli edge case noti (es. crash su file binari o race condition nelle cartelle di sessione) che vanno sistemati.
+- **Consiglio AI:** L'orchestratore deterministico (`council.py`) supporta i seat `opencode`, `agy` e `codex`. I test automatici di regressione coprono per ora solo il mode `relay`; `brainstorm`/`challenge`/`code-review` sono verificati dal vivo ma non ancora sotto CI.
 
 Il profilo MINIMAL è il punto di partenza più sicuro su Windows oggi. macOS segue gli stessi percorsi di codice di Linux ma ha visto meno uso reale.
 
