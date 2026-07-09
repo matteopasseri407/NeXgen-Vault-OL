@@ -3,19 +3,25 @@
 abbonamento flat, mai API a consumo) per brainstorming, challenge e code
 review incrociata. Vedi la nota di progetto per l'architettura completa.
 
-MVP (A1): un solo mode (`brainstorm`), un seat, un round.
+A2: tre mode (brainstorm multi-round, challenge, code-review), prompt di
+ruolo dedicati, parsing VERDICT per ogni round.
 """
 from __future__ import annotations
-import argparse, importlib.util, json, os, shutil, subprocess, sys
+import argparse, importlib.util, json, os, re, shutil, subprocess, sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
 
+VERDICT_RE = re.compile(r"(?i)verdict\s*:\s*(APPROVE|REVISE|REJECT)\b")
+REQUIRED_SEAT_FIELDS = ("vendor", "cli", "model")
+
 ENGINE_ROOT = Path(__file__).resolve().parent
 LEAK_SCAN_DIR = ENGINE_ROOT.parent / "leak-scan"
 SESSIONS_DIR = Path.home() / ".local" / "state" / "council" / "sessions"
 DEFAULT_TTL_DAYS = 7
+DEFAULT_MAX_ROUNDS = 3
+SEAT_TIMEOUT_SECONDS = 300
 
 
 def _vault_data_root() -> Path:
@@ -46,7 +52,34 @@ def load_seats() -> dict:
     seats = data.get("seats", {})
     if not seats:
         sys.exit(f"[council] {SEATS_PATH} è vuoto: espansione inerte, niente da fare.")
+    for name, seat in seats.items():
+        missing = [f for f in REQUIRED_SEAT_FIELDS if f not in seat]
+        if missing:
+            sys.exit(f"[council] seat '{name}' in {SEATS_PATH} incompleto: mancano {', '.join(missing)}.")
     return seats
+
+
+def resolve_seat(args: argparse.Namespace) -> tuple[str, dict]:
+    seats = load_seats()
+    seat_name = args.seat or next(iter(seats))
+    if seat_name not in seats:
+        sys.exit(f"[council] seat sconosciuto: {seat_name}. Disponibili: {', '.join(seats)}")
+    seat = seats[seat_name]
+    if not seat.get("zero_retention", False) and not args.allow_training_risk:
+        sys.exit(
+            f"[council] STOP: il seat '{seat_name}' NON ha garanzia zero-retention "
+            "(i dati inviati possono finire nel training del modello). "
+            "Usa --allow-training-risk solo per test tecnici con contenuto non sensibile, "
+            "mai per brief reali."
+        )
+    author_vendor = getattr(args, "author_vendor", None)
+    if author_vendor and seat["vendor"].lower() == author_vendor.lower():
+        sys.exit(
+            f"[council] STOP: il seat '{seat_name}' è dello stesso vendor ({seat['vendor']}) "
+            "del materiale in esame. La review incrociata richiede un vendor diverso da chi "
+            "ha prodotto il materiale (--author-vendor)."
+        )
+    return seat_name, seat
 
 
 def egress_gate(text: str) -> None:
@@ -78,19 +111,45 @@ def slugify(text: str) -> str:
     return slug or "session"
 
 
-def build_brief(question: str, context_path: str | None) -> str:
-    parts = [f"Domanda: {question}"]
+def _read_or_exit(path_str: str, label: str) -> str:
+    path = Path(path_str)
+    if not path.is_file():
+        sys.exit(f"[council] file {label} non trovato: {path_str}")
+    return path.read_text(encoding="utf-8")
+
+
+def build_brief(question: str | None, context_path: str | None, diff_path: str | None = None) -> str:
+    parts = []
+    if question:
+        parts.append(f"Domanda: {question}")
+    if diff_path:
+        diff_text = _read_or_exit(diff_path, "diff")
+        parts.append(f"\nDiff da revisionare:\n```diff\n{diff_text}\n```")
     if context_path:
-        context_text = Path(context_path).read_text(encoding="utf-8")
+        context_text = _read_or_exit(context_path, "di contesto")
         parts.append(f"\nContesto:\n{context_text}")
+    if not parts:
+        sys.exit("[council] brief vuoto: serve almeno una domanda, un diff o un file di contesto.")
     return "\n".join(parts)
 
 
+def new_session_dir(label: str) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    session_dir = SESSIONS_DIR / f"council-{slugify(label)}-{timestamp}"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return session_dir
+
+
 def run_seat(model: str, prompt: str, session_dir: Path) -> tuple[str, dict]:
-    proc = subprocess.run(
-        ["opencode", "run", prompt, "-m", model, "--format", "json", "--dir", str(session_dir)],
-        capture_output=True, text=True, timeout=180,
-    )
+    try:
+        proc = subprocess.run(
+            ["opencode", "run", prompt, "-m", model, "--format", "json", "--dir", str(session_dir)],
+            capture_output=True, text=True, timeout=SEAT_TIMEOUT_SECONDS,
+        )
+    except OSError as e:
+        sys.exit(f"[council] impossibile invocare il seat (brief troppo grande per la riga di comando?): {e}")
+    except subprocess.TimeoutExpired:
+        sys.exit(f"[council] il seat '{model}' non ha risposto entro {SEAT_TIMEOUT_SECONDS}s: timeout, nessun verdetto per questo round.")
     if proc.returncode != 0:
         sys.exit(f"[council] il seat non ha risposto (exit {proc.returncode}):\n{proc.stderr}")
 
@@ -106,72 +165,105 @@ def run_seat(model: str, prompt: str, session_dir: Path) -> tuple[str, dict]:
             continue
         if event.get("type") == "error":
             sys.exit(f"[council] errore dal seat: {event.get('error')}")
-        if event.get("type") == "text":
-            text_chunks.append(event["part"]["text"])
+        part = event.get("part") or {}
+        if event.get("type") == "text" and "text" in part:
+            text_chunks.append(part["text"])
         if event.get("type") == "step_finish":
-            usage = {"tokens": event["part"].get("tokens"), "cost": event["part"].get("cost")}
+            usage = {"tokens": part.get("tokens"), "cost": part.get("cost")}
     if not text_chunks:
         sys.exit("[council] il seat ha risposto ma senza testo utilizzabile (output vuoto).")
     return "".join(text_chunks), usage
 
 
-def extract_verdict(text: str) -> str | None:
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("VERDICT:"):
-            return line.removeprefix("VERDICT:").strip()
-    return None
+def extract_verdict(text: str) -> str:
+    match = VERDICT_RE.search(text)
+    return match.group(1).upper() if match else "(assente)"
+
+
+def run_rounds(
+    seat_name: str, seat: dict, session_dir: Path, mode_label: str, brief: str,
+    role_prompt_initial: str, role_prompt_continue: str | None, rounds: int,
+) -> tuple[list[str], list[str]]:
+    responses: list[str] = []
+    verdicts: list[str] = []
+    prompt = role_prompt_initial.replace("{brief}", brief)
+    for r in range(1, rounds + 1):
+        print(f"[council] round {r}/{rounds} — seat: {seat_name} ({seat['model']})")
+        response, _usage = run_seat(seat["model"], prompt, session_dir)
+        seat_file = session_dir / f"{r:02d}-{seat_name}-{mode_label}-r{r}.md"
+        seat_file.write_text(response, encoding="utf-8")
+        verdict = extract_verdict(response)
+        if verdict == "(assente)":
+            print(f"[council] ATTENZIONE: nessuna riga VERDICT trovata nella risposta del round {r}.")
+        responses.append(response)
+        verdicts.append(verdict)
+        print(f"[council] round {r} verdetto: {verdict}")
+        if r < rounds:
+            if role_prompt_continue is None:
+                break
+            prompt = role_prompt_continue.replace("{brief}", brief).replace("{previous}", response)
+    return responses, verdicts
+
+
+def write_verdict(session_dir: Path, seat_name: str, seat: dict, mode: str, verdicts: list[str], final_response: str) -> None:
+    lines = [
+        "# Verdetto", "",
+        f"Seat: {seat_name} ({seat['model']})",
+        f"Mode: {mode}",
+        f"Round eseguiti: {len(verdicts)}",
+    ]
+    for i, v in enumerate(verdicts, 1):
+        lines.append(f"Verdict round {i}: {v}")
+    lines.append("")
+    lines.append(f"## Risposta finale (round {len(verdicts)})")
+    lines.append("")
+    lines.append(final_response)
+    (session_dir / "verdict.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _run_mode(args: argparse.Namespace, mode: str, label: str, brief: str, role_initial_name: str, role_continue_name: str | None, rounds: int) -> None:
+    seat_name, seat = resolve_seat(args)
+    egress_gate(brief)
+
+    session_dir = new_session_dir(label)
+    (session_dir / "00-brief.md").write_text(brief, encoding="utf-8")
+
+    role_initial = (ENGINE_ROOT / "prompts" / role_initial_name).read_text(encoding="utf-8")
+    role_continue = (
+        (ENGINE_ROOT / "prompts" / role_continue_name).read_text(encoding="utf-8")
+        if role_continue_name else None
+    )
+
+    print(f"[council] sessione: {session_dir}")
+    print(f"[council] seat: {seat_name} ({seat['model']}) — mode: {mode}")
+
+    responses, verdicts = run_rounds(seat_name, seat, session_dir, mode, brief, role_initial, role_continue, rounds)
+
+    write_verdict(session_dir, seat_name, seat, mode, verdicts, responses[-1])
+
+    print(f"[council] verdetto finale: {verdicts[-1]}")
+    print(f"[council] file: {session_dir / 'verdict.md'}")
+    print()
+    print(responses[-1])
 
 
 def cmd_brainstorm(args: argparse.Namespace) -> None:
-    seats = load_seats()
-    seat_name = args.seat or next(iter(seats))
-    if seat_name not in seats:
-        sys.exit(f"[council] seat sconosciuto: {seat_name}. Disponibili: {', '.join(seats)}")
-    seat = seats[seat_name]
-    if not seat.get("zero_retention", False) and not args.allow_training_risk:
-        sys.exit(
-            f"[council] STOP: il seat '{seat_name}' NON ha garanzia zero-retention "
-            "(i dati inviati possono finire nel training del modello). "
-            "Usa --allow-training-risk solo per test tecnici con contenuto non sensibile, "
-            "mai per brief reali."
-        )
-
+    rounds = args.rounds
+    if rounds > args.max_rounds:
+        print(f"[council] --rounds {rounds} supera --max-rounds {args.max_rounds}: eseguo solo {args.max_rounds} round.")
+        rounds = args.max_rounds
     brief = build_brief(args.question, args.context)
-    egress_gate(brief)
+    _run_mode(args, "brainstorm", args.question, brief, "brainstorm.md", "brainstorm-continue.md", rounds)
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    session_dir = SESSIONS_DIR / f"council-{slugify(args.question)}-{timestamp}"
-    session_dir.mkdir(parents=True, exist_ok=True)
-    (session_dir / "00-brief.md").write_text(brief, encoding="utf-8")
 
-    role_prompt = (ENGINE_ROOT / "prompts" / "brainstorm.md").read_text(encoding="utf-8")
-    full_prompt = role_prompt.replace("{brief}", brief)
+def cmd_challenge(args: argparse.Namespace) -> None:
+    brief = build_brief(args.plan, args.context)
+    _run_mode(args, "challenge", args.plan, brief, "challenge.md", None, 1)
 
-    print(f"[council] sessione: {session_dir}")
-    print(f"[council] seat: {seat_name} ({seat['model']})")
 
-    response, usage = run_seat(seat["model"], full_prompt, session_dir)
-
-    seat_file = session_dir / f"01-{seat_name}-brainstorm.md"
-    seat_file.write_text(response, encoding="utf-8")
-
-    verdict = extract_verdict(response)
-    if verdict is None:
-        print("[council] ATTENZIONE: nessuna riga VERDICT trovata nella risposta.")
-        verdict = "(assente)"
-
-    verdict_text = (
-        f"# Verdetto\n\nSeat: {seat_name} ({seat['model']})\n"
-        f"Round: 1\nVerdict: {verdict}\nCosto: {usage.get('cost')}\n\n"
-        f"## Risposta\n\n{response}\n"
-    )
-    (session_dir / "verdict.md").write_text(verdict_text, encoding="utf-8")
-
-    print(f"[council] verdetto: {verdict}")
-    print(f"[council] file: {seat_file}")
-    print()
-    print(response)
+def cmd_code_review(args: argparse.Namespace) -> None:
+    brief = build_brief(None, args.context, diff_path=args.diff)
+    _run_mode(args, "code-review", Path(args.diff).name, brief, "code-review.md", None, 1)
 
 
 def cmd_clean(args: argparse.Namespace) -> None:
@@ -193,19 +285,38 @@ def cmd_clean(args: argparse.Namespace) -> None:
     print(f"[council] pulizia completata: {removed} sessione/i rimossa/e.")
 
 
+def _add_common_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--seat", metavar="NAME", help="seat da usare (default: il primo in seats.yaml)")
+    parser.add_argument(
+        "--allow-training-risk", action="store_true",
+        help="consenti l'uso di un seat senza garanzia zero-retention (solo test tecnici)",
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="council", description=__doc__)
     sub = ap.add_subparsers(dest="mode", required=True)
 
-    brainstorm = sub.add_parser("brainstorm", help="brainstorming a 1 seat, 1 round (MVP A1)")
+    brainstorm = sub.add_parser("brainstorm", help="brainstorming, 1+ round con replica del proponente")
     brainstorm.add_argument("question", help="la domanda da porre al consiglio")
     brainstorm.add_argument("--context", metavar="FILE", help="file di contesto da allegare")
-    brainstorm.add_argument("--seat", metavar="NAME", help="seat da usare (default: il primo in seats.yaml)")
-    brainstorm.add_argument(
-        "--allow-training-risk", action="store_true",
-        help="consenti l'uso di un seat senza garanzia zero-retention (solo test tecnici)",
-    )
+    brainstorm.add_argument("--rounds", type=int, default=1, help="numero di round (default: 1)")
+    brainstorm.add_argument("--max-rounds", type=int, default=DEFAULT_MAX_ROUNDS, help=f"tetto invalicabile ai round (default: {DEFAULT_MAX_ROUNDS})")
+    _add_common_args(brainstorm)
     brainstorm.set_defaults(func=cmd_brainstorm)
+
+    challenge = sub.add_parser("challenge", help="un seat avversario cerca il difetto dominante di un piano")
+    challenge.add_argument("plan", help="il piano/proposta da mettere alla prova")
+    challenge.add_argument("--context", metavar="FILE", help="file di contesto da allegare")
+    _add_common_args(challenge)
+    challenge.set_defaults(func=cmd_challenge)
+
+    code_review = sub.add_parser("code-review", help="review incrociata di un diff (vendor diverso da chi l'ha scritto)")
+    code_review.add_argument("diff", metavar="DIFF_FILE", help="file col diff/patch da revisionare")
+    code_review.add_argument("--context", metavar="FILE", help="file di contesto aggiuntivo (es. perché del cambiamento)")
+    code_review.add_argument("--author-vendor", metavar="VENDOR", help="vendor che ha scritto il codice: blocca se coincide col vendor del seat")
+    _add_common_args(code_review)
+    code_review.set_defaults(func=cmd_code_review)
 
     clean = sub.add_parser("clean", help="rimuove le sessioni oltre il TTL (retention)")
     clean.add_argument("--ttl-days", type=int, default=DEFAULT_TTL_DAYS, help=f"default: {DEFAULT_TTL_DAYS}")
