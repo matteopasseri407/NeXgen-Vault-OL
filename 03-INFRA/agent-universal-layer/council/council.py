@@ -472,14 +472,14 @@ def run_seat(seat: dict, prompt: str, session_dir: Path) -> tuple[str, dict]:
     cli = seat["cli"]
     argv, output_file = _build_seat_command(seat, prompt, session_dir)
     try:
-        proc = subprocess.Popen(
-            argv,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True,
-        )
-    except OSError as e:
-        raise SeatRunError(f"[council] impossibile invocare il seat (brief troppo grande per la riga di comando?): {e}", "invocation")
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True,
+            )
+        except OSError as e:
+            raise SeatRunError(f"[council] impossibile invocare il seat (brief troppo grande per la riga di comando?): {e}", "invocation")
 
-    try:
         line_queue: "queue.Queue[str | None]" = queue.Queue()
         stderr_lines: list[str] = []
         stdout_reader = threading.Thread(target=_drain_lines, args=(proc.stdout, line_queue), daemon=True)
@@ -547,9 +547,10 @@ def run_seat(seat: dict, prompt: str, session_dir: Path) -> tuple[str, dict]:
             raise SeatRunError(f"[council] il seat non ha risposto (exit {returncode}):\n{''.join(stderr_lines)}", "process_error")
 
         if output_file is not None:
-            if not output_file.is_file() or not output_file.read_text(encoding="utf-8").strip():
+            output_text = output_file.read_text(encoding="utf-8") if output_file.is_file() else ""
+            if not output_text.strip():
                 raise SeatRunError("[council] il seat ha risposto ma senza testo utilizzabile (output vuoto).", "empty_response")
-            return output_file.read_text(encoding="utf-8"), usage
+            return output_text, usage
 
         if not text_chunks:
             raise SeatRunError("[council] il seat ha risposto ma senza testo utilizzabile (output vuoto).", "empty_response")
