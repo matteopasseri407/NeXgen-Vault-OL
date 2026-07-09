@@ -285,34 +285,59 @@ def _prune_backups(path, keep=3):
         except OSError:
             pass
 
+def _owner_only_mode(path):
+    try:
+        return (path.stat().st_mode & 0o700) or 0o600
+    except OSError:
+        return 0o600
+
+def _secure_create_text(path, text, encoding="utf-8", mode=0o600):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as f:
+            fd = None
+            f.write(text)
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+def _secure_backup(path, text, encoding="utf-8"):
+    stem = path.name + ".bak-" + time.strftime("%Y%m%d-%H%M%S")
+    for attempt in range(100):
+        suffix = "" if attempt == 0 else f"-{attempt}"
+        bak = path.with_name(stem + suffix)
+        try:
+            _secure_create_text(bak, text, encoding=encoding, mode=_owner_only_mode(path))
+            return bak
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"could not create a unique backup for {path}")
+
 def _atomic_write_text(path, text, encoding="utf-8"):
     """write_text() truncates then writes: a CLI re-reading the file (this
     runs on a 30-minute recurring timer, config files are live) can catch it
     mid-write and see a truncated/empty JSON. Write to a same-directory temp
     file and os.replace() it in, which POSIX/Windows both guarantee atomic
-    for a rename onto an existing path. Copies the existing file's mode onto
-    the temp file first: os.replace is a rename, not an in-place write, so
-    without this a rewrite would silently reset permission bits to umask."""
-    old_mode = None
-    if path.exists():
-        try:
-            old_mode = path.stat().st_mode
-        except OSError:
-            pass
+    for a rename onto an existing path. Create the temp file with owner-only
+    permissions from the start: these files can contain MCP auth material, so
+    creating first and chmodding later would expose a small but real window."""
+    mode = _owner_only_mode(path)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(text, encoding=encoding)
-    if old_mode is not None:
-        try:
-            os.chmod(tmp, old_mode)
-        except OSError:
-            pass
+    if tmp.exists():
+        tmp = path.with_name(f"{path.name}.{os.getpid()}-{time.monotonic_ns()}.tmp")
+    _secure_create_text(tmp, text, encoding=encoding, mode=mode)
     os.replace(tmp, path)
 
 def write_json_section(path, key, new_section, live_section, serialize, indent_exact=None):
     if not path.exists():
         print(f">>> {path.name} not present: CLI never launched yet (no default config file), skipping."); return 3
     raw = path.read_text("utf-8")
-    live = json.loads(raw)
+    try:
+        live = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f">>> STOP: {path.name} is not valid JSON ({e}). Fix it or restore a .bak-* backup before rerunning."); return 2
+    if not isinstance(live, dict):
+        print(f">>> STOP: {path.name} JSON root is not an object; refusing to patch it."); return 2
     # indent_exact: if given, only match the key at that exact indentation
     # (for .claude.json, where "mcpServers" also appears nested in projects).
     ind_pat = re.escape(indent_exact) if indent_exact is not None else r'[ \t]*'
@@ -323,8 +348,11 @@ def write_json_section(path, key, new_section, live_section, serialize, indent_e
         # Fresh install: the key is entirely absent, not just at an
         # unexpected indent. Insert an empty placeholder and let the normal
         # surgical-replace logic below fill it in.
-        raw = _insert_new_top_level_key(raw, key, indent_exact)
-        live = json.loads(raw)
+        try:
+            raw = _insert_new_top_level_key(raw, key, indent_exact)
+            live = json.loads(raw)
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f">>> STOP: cannot insert the {json.dumps(key)} placeholder ({e})."); return 2
         m = re.search(rf'(?m)^({ind_pat}){re.escape(json.dumps(key))}[ \t]*:[ \t]*', raw)
         if not m or raw[m.end():m.end() + 1] != "{":
             print(f">>> STOP: inserted the {json.dumps(key)} placeholder but can't find it again (unexpected file shape)."); return 2
@@ -359,8 +387,7 @@ def write_json_section(path, key, new_section, live_section, serialize, indent_e
     if not d:
         print("\n>>> Nothing to write."); return 0
 
-    bak = path.with_name(path.name + ".bak-" + time.strftime("%Y%m%d-%H%M%S"))
-    bak.write_text(raw, "utf-8")
+    bak = _secure_backup(path, raw, "utf-8")
     _prune_backups(path)
     _atomic_write_text(path, new_text, "utf-8")
     json.loads(path.read_text("utf-8"))
@@ -371,7 +398,12 @@ def write_opencode():
     path = HOME / ".config/opencode/opencode.json"
     if not path.exists():
         print(">>> opencode.json not present: OpenCode never launched yet (no default config file), skipping."); return 3
-    live = json.loads(path.read_text("utf-8"))
+    try:
+        live = json.loads(path.read_text("utf-8"))
+    except json.JSONDecodeError as e:
+        print(f">>> STOP: {path.name} is not valid JSON ({e}). Fix it or restore a .bak-* backup before rerunning."); return 2
+    if not isinstance(live, dict):
+        print(f">>> STOP: {path.name} JSON root is not an object; refusing to patch it."); return 2
     man = load_manifest()
     gen = {n: r_opencode(n, s) for n, s in man.items() if "opencode" in s["targets"]}
     gen = keep_extras(gen, live.get("mcp", {}), "opencode")
@@ -382,7 +414,12 @@ def write_antigravity():
     path = HOME / ".gemini/antigravity/mcp_config.json"
     if not path.exists():
         print(">>> mcp_config.json not present: Antigravity never launched yet (no default config file), skipping."); return 3
-    live = json.loads(path.read_text("utf-8"))
+    try:
+        live = json.loads(path.read_text("utf-8"))
+    except json.JSONDecodeError as e:
+        print(f">>> STOP: {path.name} is not valid JSON ({e}). Fix it or restore a .bak-* backup before rerunning."); return 2
+    if not isinstance(live, dict):
+        print(f">>> STOP: {path.name} JSON root is not an object; refusing to patch it."); return 2
     live_servers = live.get("mcpServers", {})
     man = load_manifest()
     gen = {}
@@ -436,7 +473,10 @@ def write_codex(path=None):
         print(f">>> {path.name} not present: Codex never launched yet (no default config file), skipping."); return 3
     raw = path.read_text("utf-8")
     lines = raw.split("\n")
-    live = tomllib.loads(raw)
+    try:
+        live = tomllib.loads(raw)
+    except tomllib.TOMLDecodeError as e:
+        print(f">>> STOP: {path.name} is not valid TOML ({e}). Fix it or restore a .bak-* backup before rerunning."); return 2
     live_srv = live.get("mcp_servers", {})
     man = load_manifest()
 
@@ -506,8 +546,7 @@ def write_codex(path=None):
     if not d:
         print("\n>>> Nothing to write."); return 0
 
-    bak = path.with_name(path.name + ".bak-" + time.strftime("%Y%m%d-%H%M%S"))
-    bak.write_text(raw, "utf-8")
+    bak = _secure_backup(path, raw, "utf-8")
     _prune_backups(path)
     _atomic_write_text(path, new_text, "utf-8")
     tomllib.loads(path.read_text("utf-8"))
@@ -524,7 +563,12 @@ def write_claude(path=None):
     path = path or HOME / ".claude.json"
     if not path.exists():
         print(">>> .claude.json not present: Claude never launched yet (no default config file), skipping."); return 3
-    live = json.loads(path.read_text("utf-8"))
+    try:
+        live = json.loads(path.read_text("utf-8"))
+    except json.JSONDecodeError as e:
+        print(f">>> STOP: {path.name} is not valid JSON ({e}). Fix it or restore a .bak-* backup before rerunning."); return 2
+    if not isinstance(live, dict):
+        print(f">>> STOP: {path.name} JSON root is not an object; refusing to patch it."); return 2
     live_mcp = live.get("mcpServers", {})
     man = load_manifest()
     gen = {}

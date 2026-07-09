@@ -240,6 +240,67 @@ def test_write_creates_backup(sandbox_with_live_configs, cli):
     assert len(backups) >= 1, f"{cli}: nessun backup creato dopo --write"
 
 
+@pytest.mark.parametrize("cli", DIALECTS)
+def test_write_creates_owner_only_backup_and_output(sandbox_with_live_configs, cli):
+    sb = sandbox_with_live_configs
+    mod = load_render_module(sb)
+    path = sb.live_config_path(cli)
+    path.chmod(0o644)
+
+    rc = getattr(mod, WRITE_FN[cli])()
+    assert rc == 0
+
+    backups = list(path.parent.glob(path.name + ".bak-*"))
+    assert backups, f"{cli}: nessun backup creato dopo --write"
+    assert all((p.stat().st_mode & 0o077) == 0 for p in backups), f"{cli}: backup leggibile da gruppo/altri"
+    assert (path.stat().st_mode & 0o077) == 0, f"{cli}: output leggibile da gruppo/altri"
+
+
+def test_write_rejects_invalid_json_without_touching_file(sandbox_with_live_configs, capsys):
+    sb = sandbox_with_live_configs
+    path = sb.live_config_path("opencode")
+    bad = '{"mcp": '
+    path.write_text(bad, encoding="utf-8")
+
+    mod = load_render_module(sb)
+    rc = mod.write_opencode()
+    out = capsys.readouterr().out
+
+    assert rc == 2
+    assert "STOP" in out
+    assert path.read_text(encoding="utf-8") == bad
+
+
+def test_write_rejects_non_object_json_root_without_touching_file(sandbox_with_live_configs, capsys):
+    sb = sandbox_with_live_configs
+    path = sb.live_config_path("claude")
+    bad = "[]"
+    path.write_text(bad, encoding="utf-8")
+
+    mod = load_render_module(sb)
+    rc = mod.write_claude()
+    out = capsys.readouterr().out
+
+    assert rc == 2
+    assert "STOP" in out
+    assert path.read_text(encoding="utf-8") == bad
+
+
+def test_write_rejects_invalid_toml_without_touching_file(sandbox_with_live_configs, capsys):
+    sb = sandbox_with_live_configs
+    path = sb.live_config_path("codex")
+    bad = "[mcp_servers"
+    path.write_text(bad, encoding="utf-8")
+
+    mod = load_render_module(sb)
+    rc = mod.write_codex()
+    out = capsys.readouterr().out
+
+    assert rc == 2
+    assert "STOP" in out
+    assert path.read_text(encoding="utf-8") == bad
+
+
 def test_prune_backups_keeps_at_most_three(tmp_path):
     mod_spec_path = None
     # import diretto della sola funzione via file reale (non serve una sandbox
