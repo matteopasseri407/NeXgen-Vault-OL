@@ -6,7 +6,7 @@ review incrociata. Vedi la nota di progetto per l'architettura completa.
 MVP (A1): un solo mode (`brainstorm`), un seat, un round.
 """
 from __future__ import annotations
-import argparse, importlib.util, json, shutil, subprocess, sys
+import argparse, importlib.util, json, os, shutil, subprocess, sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -18,6 +18,17 @@ SESSIONS_DIR = Path.home() / ".local" / "state" / "council" / "sessions"
 DEFAULT_TTL_DAYS = 7
 
 
+def _vault_data_root() -> Path:
+    """Stesso pattern AGENT_ENGINE_ROOT/AGENT_VAULT_DATA di agent_sync.py:
+    i dati utente (quali seat, quali modelli) vivono nel piano dati, mai nel
+    motore pubblico, a prescindere da dove il motore è installato."""
+    vault = Path(os.environ.get("KNOWLEDGE_VAULT_PATH") or str(Path.home() / "KnowledgeVault"))
+    return Path(os.environ.get("AGENT_VAULT_DATA") or str(vault))
+
+
+SEATS_PATH = _vault_data_root() / "03-INFRA" / "agent-universal-layer" / "council" / "seats.yaml"
+
+
 def _load_leak_scan():
     spec = importlib.util.spec_from_file_location("leak_scan", LEAK_SCAN_DIR / "leak_scan.py")
     mod = importlib.util.module_from_spec(spec)
@@ -26,12 +37,15 @@ def _load_leak_scan():
 
 
 def load_seats() -> dict:
-    data = yaml.safe_load((ENGINE_ROOT / "seats.yaml").read_text(encoding="utf-8")) or {}
+    if not SEATS_PATH.is_file():
+        sys.exit(
+            f"[council] nessun seats.yaml nel piano dati ({SEATS_PATH}): espansione inerte.\n"
+            f"Copia {ENGINE_ROOT / 'seats.yaml.example'} in quel percorso e personalizzalo."
+        )
+    data = yaml.safe_load(SEATS_PATH.read_text(encoding="utf-8")) or {}
     seats = data.get("seats", {})
     if not seats:
-        sys.exit(
-            "[council] nessun seat configurato in seats.yaml: espansione inerte, niente da fare."
-        )
+        sys.exit(f"[council] {SEATS_PATH} è vuoto: espansione inerte, niente da fare.")
     return seats
 
 

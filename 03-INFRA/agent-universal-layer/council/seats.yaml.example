@@ -1,0 +1,39 @@
+# Template del piano dati utente per il Consiglio delle AI.
+#
+# Il motore pubblico non prescrive QUALI modelli usare: la scelta dipende
+# dagli abbonamenti che hai, da cosa esce ogni mese come frontier, dal
+# budget. Questo file è solo lo schema + i criteri generali; le scelte vere
+# vivono nel tuo piano dati (fuori dal motore, mai committato qui), di
+# default in:
+#   $AGENT_VAULT_DATA/03-INFRA/agent-universal-layer/council/seats.yaml
+# (AGENT_VAULT_DATA non impostata => $KNOWLEDGE_VAULT_PATH => ~/KnowledgeVault,
+# stesso pattern di AGENT_ENGINE_ROOT/AGENT_VAULT_DATA usato da agent_sync.py).
+#
+# Senza un seats.yaml valido in quel percorso, `council` si ferma e spiega
+# cosa manca: l'espansione è disattivata di default, zero dipendenze forzate.
+#
+# Criteri generali per scegliere i seat (non i modelli specifici):
+#   - usa CLI già pagate ad abbonamento flat che hai comunque, mai una nuova
+#     API a consumo aperta solo per questo;
+#   - il vendor di un seat consultato deve essere diverso dal vendor che ha
+#     prodotto il materiale in esame (niente auto-review dello stesso vendor);
+#   - preferisci seat con garanzia zero-retention per materiale reale;
+#     seat senza quella garanzia (es. tier gratuiti che riusano i dati per
+#     training) vanno bene solo per test tecnici con contenuto non sensibile;
+#   - verifica la policy dati del canale con una fonte primaria (pagina
+#     privacy/ToS del provider), non fidarti di riassunti di terzi.
+#
+# Schema di ogni seat:
+#   <nome-seat>:
+#     vendor: <vendor del modello, es. openai/anthropic/deepseek/zhipu/...>
+#     cli: <CLI locale che lo invoca in headless, es. opencode/agy/codex>
+#     model: <identificatore modello nel formato atteso dalla CLI>
+#     zero_retention: true|false   # garanzia contrattuale di non-training,
+#                                  # da verificare con fonte primaria
+
+seats:
+  esempio-seat:
+    vendor: nome-vendor
+    cli: nome-cli
+    model: provider/nome-modello
+    zero_retention: false
