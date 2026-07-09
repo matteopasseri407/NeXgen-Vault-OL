@@ -50,16 +50,19 @@ class Finding(NamedTuple):
     lineno: int
     kind: str       # "pattern:<name>" or "denylist"
     redacted: str
+    blocking: bool  # True = leak_hard/denylist (blocks); False = leak_soft (warns only)
 
 
-def load_patterns(path: Path) -> tuple[list[tuple[str, str]], list[str]]:
+def load_patterns(path: Path) -> tuple[list[tuple[str, str, bool]], list[str]]:
     if not path.is_file():
         sys.exit(f"[leak-scan] ABORT: pattern file not found: {path}")
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     hard = data.get("leak_hard", [])
     if not hard:
         sys.exit("[leak-scan] ABORT: leak_hard is empty in the pattern file")
-    named = [(f"p{i}", pat) for i, pat in enumerate(hard)]
+    soft = data.get("leak_soft", [])
+    named = [(f"h{i}", pat, True) for i, pat in enumerate(hard)]
+    named += [(f"s{i}", pat, False) for i, pat in enumerate(soft)]
     allow = data.get("leak_allow", [])
     return named, allow
 
@@ -84,21 +87,21 @@ def redact(tok: str) -> str:
     return f"{tok[:2]}…{tok[-2:]} ({len(tok)} chars)"
 
 
-def scan_units(units: Iterable[Unit], patterns: list[tuple[str, str]], allow: list[str],
+def scan_units(units: Iterable[Unit], patterns: list[tuple[str, str, bool]], allow: list[str],
                denylist: list[str]) -> list[Finding]:
     allow_re = [re.compile(a) for a in allow]
-    pat_re = [(name, re.compile(p)) for name, p in patterns]
+    pat_re = [(name, re.compile(p), blocking) for name, p, blocking in patterns]
     findings: list[Finding] = []
     for u in units:
-        for name, rx in pat_re:
+        for name, rx, blocking in pat_re:
             for m in rx.finditer(u.text):
                 tok = m.group(0)
                 if any(a.search(tok) for a in allow_re):
                     continue
-                findings.append(Finding(u.label, u.lineno, f"pattern:{name}", redact(tok)))
+                findings.append(Finding(u.label, u.lineno, f"pattern:{name}", redact(tok), blocking))
         for lit in denylist:
             if lit and lit in u.text:
-                findings.append(Finding(u.label, u.lineno, "denylist", redact(lit)))
+                findings.append(Finding(u.label, u.lineno, "denylist", redact(lit), True))
     return findings
 
 
@@ -135,6 +138,11 @@ def parse_added_lines(diff_text: str, label_prefix: str) -> list[Unit]:
             cur_file = raw[4:].split("\t")[0]
             if cur_file.startswith("b/"):
                 cur_file = cur_file[2:]
+            if cur_file != "/dev/null":
+                label = f"{label_prefix}{cur_file}" if label_prefix else cur_file
+                # the filename itself is new content too (a secret can land in
+                # a name, not just in a line): scan it, not just the diff body.
+                units.append(Unit(f"{label} (filename)", 0, cur_file))
             continue
         if raw.startswith("@@"):
             m = re.search(r"\+(\d+)", raw)
@@ -208,10 +216,21 @@ def main() -> int:
     if not findings:
         return 0
 
+    blocking = [f for f in findings if f.blocking]
+    soft = [f for f in findings if not f.blocking]
+
+    if soft:
+        print("[leak-scan] soft warnings (not blocking):")
+        for f in soft:
+            print(f"  ? {f.label}:{f.lineno}  [{f.kind}]  match={f.redacted}")
+
+    if not blocking:
+        return 0
+
     print("[leak-scan] BLOCKING leaks found:")
-    for f in findings:
+    for f in blocking:
         print(f"  ! {f.label}:{f.lineno}  [{f.kind}]  match={f.redacted}")
-    print(f"[leak-scan] total: {len(findings)} finding(s) — commit/push blocked.")
+    print(f"[leak-scan] total: {len(blocking)} finding(s) — commit/push blocked.")
     return 1
 
 

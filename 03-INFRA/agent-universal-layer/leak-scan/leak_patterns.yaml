@@ -15,11 +15,17 @@ leak_hard:
   - '\b[0-9a-f]{40,}\b'                                  # long hex token/hash
   - '\b\d{7,}\b'                                         # long numeric id: chat id, phone, project number
   # HIGH-ENTROPY token in quotes: 16+ chars, mixed Aa0, no separators.
+  # Deliberately alnum-only: catches cred-ids/api-keys but NOT snake/kebab env
+  # names (TELEGRAM_BOT_TOKEN, bearer_token_env_var, agent-universal-layer).
+  # Widening the charset instead of adding a targeted pattern reintroduces
+  # exactly that false-positive class (do not "fix" this by broadening it).
   - '["\x27](?=[A-Za-z0-9]{16,}["\x27])(?=[A-Za-z0-9]*[a-z])(?=[A-Za-z0-9]*[A-Z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{16,}["\x27]'
   - 'AKIA[0-9A-Z]{16}'                                   # AWS access key id
   - '-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----'       # private key
   - 'gh[po]_[A-Za-z0-9]{36}'                              # GitHub token (ghp_/gho_)
   - 'sk-[A-Za-z0-9]{20,}'                                 # OpenAI/Anthropic-style API key
+  - '(sk|pk)_(live|test)_[A-Za-z0-9]{16,}'                # Stripe-style secret/publishable key
+  - 'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'  # JWT (header.payload.sig)
 
 leak_soft:
   - '(?i)\bmatteo\b'

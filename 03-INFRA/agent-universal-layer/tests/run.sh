@@ -17,8 +17,8 @@ if ! python3 -c "import yaml" >/dev/null 2>&1; then
 fi
 
 echo "== leak-check sulle fixture (criterio di accettazione B1) =="
-LEAK_SCAN="../sanitize/leak_scan.py"
-PATTERNS="../sanitize/leak_patterns.yaml"
+LEAK_SCAN="../leak-scan/leak_scan.py"
+PATTERNS="../leak-scan/leak_patterns.yaml"
 if [ -f "$LEAK_SCAN" ] && [ -f "$PATTERNS" ]; then
   if ! python3 "$LEAK_SCAN" --patterns "$PATTERNS" --tree fixtures; then
     echo "tests/run.sh: LEAK nelle fixture — bloccante, vedi sopra." >&2
