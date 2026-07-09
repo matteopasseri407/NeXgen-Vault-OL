@@ -165,3 +165,23 @@ def test_doctor_ok_when_pinned_at_latest_version(sandbox):
     _make_consumer_engine_clone(sandbox, "v0.2.0")
     result = run_agent_doctor(sandbox)
     assert "consumer engine at the latest released version (v0.2.0)" in result.stdout, result.stdout + result.stderr
+
+
+# ── agent-doctor: Codex CLI known-bad-version check ──────────────────────
+
+def _stub_codex_version(sandbox, version_output: str) -> None:
+    stub = sandbox.bin_stubs / "codex"
+    stub.write_text(f"#!/bin/sh\necho '{version_output}'\n", encoding="utf-8")
+    stub.chmod(stub.stat().st_mode | 0o111)
+
+
+def test_doctor_fails_on_known_bad_codex_version(sandbox):
+    _stub_codex_version(sandbox, "codex-cli 0.143.0")
+    result = run_agent_doctor(sandbox)
+    assert "Codex CLI 0.143.0 has a known tool-dispatcher regression" in result.stdout, result.stdout + result.stderr
+
+
+def test_doctor_ok_on_other_codex_version(sandbox):
+    _stub_codex_version(sandbox, "codex-cli 0.142.0")
+    result = run_agent_doctor(sandbox)
+    assert "Codex CLI 0.142.0 (not in the known-bad list)" in result.stdout, result.stdout + result.stderr

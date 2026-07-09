@@ -310,6 +310,27 @@ done
 [ "${n:-0}" -gt 0 ] && ok "$n readable skills in ~/.agents/skills" || warn "no skill in ~/.agents/skills (fresh install, or none configured in the manifest yet)"
 [ -n "$broken" ] && fail "BROKEN skills (self-loop/dangling symlink):$broken — fix with: python3 $ENGINE_ROOT/scripts/skills-sync.py --apply"
 
+# Third-party CLI compatibility: a short, pruneable list of known-broken
+# releases. NOT a general version pin -- only versions confirmed broken here
+# (verified live: every tool call, including a no-op, was rejected with
+# "unsupported call") get listed. Remove an entry once you've confirmed the
+# upstream release fixed it; this list is expected to go stale and shrink.
+sec "Third-party CLI compatibility"
+if command -v codex >/dev/null 2>&1; then
+  codex_ver=$(codex --version 2>/dev/null | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+  case "$codex_ver" in
+    0.143.0)
+      fail "Codex CLI $codex_ver has a known tool-dispatcher regression (every tool call is rejected as 'unsupported call') -- known-bad as of 2026-07-09, upgrade or downgrade past it. Check https://github.com/openai/codex/releases before assuming this is still accurate."
+      ;;
+    "")
+      : # codex present but --version didn't parse a semver -- don't guess
+      ;;
+    *)
+      ok "Codex CLI $codex_ver (not in the known-bad list)"
+      ;;
+  esac
+fi
+
 sec "OpenCode config"
 if command -v node >/dev/null 2>&1 && [ -f "$OCJSON" ]; then
   if node -e "JSON.parse(require('fs').readFileSync('$OCJSON','utf8'))" 2>/dev/null; then

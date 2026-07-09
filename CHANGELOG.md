@@ -8,6 +8,20 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## [0.3.0] - 2026-07-09
+
+### Added
+
+- `AI-INSTALLER.md` / `AI-UNINSTALL.md`: fast, autonomous companions to
+  `INIT.md` / `docs/uninstall.md` for an agent to run with minimal
+  back-and-forth. Both defer to the existing guide for the actual
+  mechanism (no duplicated/divergent instructions) and require explicit
+  confirmation before any destructive step.
+- `agent-doctor`: a short, pruneable "third-party CLI compatibility" check
+  that flags a known-broken Codex CLI release (a real tool-dispatcher
+  regression, not a general version pin) instead of failing silently or
+  mysteriously when every tool call gets rejected.
+
 ## [0.2.0] - 2026-07-09
 
 ### Added
