@@ -27,7 +27,7 @@ except ModuleNotFoundError:
 
 HOME = Path.home()
 HERE = Path(__file__).parent
-# The manifest is DATA (Matteo's real server list, concrete values), never
+# The manifest is DATA (the user's real server list, concrete values), never
 # something the engine repo should serve — read it from vault_data, not from
 # HERE (this script may be running from a cloned engine, where the sibling
 # manifest.yaml is only the generic product template).

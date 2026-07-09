@@ -36,7 +36,7 @@ One single place decides whether something is broken, one single place tells the
 | `skill-check` | executor | advisory security check of a skill (SkillSpector) |
 | `sync-vault-from-remote` | executor | pulls the vault from the remote before apply |
 | `n8n-vault-backup` | executor | nightly backup of n8n workflows (cron on the remote backend) |
-| `sync-job-pipeline` | executor | refreshes the job-search dashboard |
+| domain refreshers | executor | optional user-owned dashboard/data refreshers, configured in the private data vault |
 | tunnels to the remote | executor | persistent SSH tunnels (OCR, n8n, firecrawl) |
 
 ## Extension principle

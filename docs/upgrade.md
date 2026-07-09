@@ -79,6 +79,9 @@ is the baseline this mechanism starts counting from.
 - The pin never moves by itself.
 - `agent-sync`/`agent-doctor` never `git pull` or `git checkout` your
   consumer engine clone.
+- Your consumer clone never publishes engine code. Maintainer-only controls
+  such as `engine-push` and public-repo anti-leak hooks are for contributors
+  publishing this repository, not for normal private vault usage.
 - A data migration never runs against a schema version newer than what the
   installed engine understands — if that happens (e.g. you rolled the
   engine back), `agent-sync` leaves your data untouched and logs why.

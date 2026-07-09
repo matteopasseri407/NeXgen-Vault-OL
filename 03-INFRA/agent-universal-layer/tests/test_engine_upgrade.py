@@ -39,7 +39,7 @@ def test_data_migrations_fresh_install_stamps_baseline_without_touching_data(san
 
     user_file = env.vault_data / "99-INDEX" / "USER-PROFILE.md"
     user_file.parent.mkdir(parents=True, exist_ok=True)
-    user_file.write_text("dati personali di Matteo\n", encoding="utf-8")
+    user_file.write_text("dati personali utente\n", encoding="utf-8")
     before_hash = hashlib.sha256(user_file.read_bytes()).hexdigest()
 
     mod.data_migrations(env)
@@ -165,6 +165,7 @@ def test_doctor_ok_when_pinned_at_latest_version(sandbox):
     _make_consumer_engine_clone(sandbox, "v0.2.0")
     result = run_agent_doctor(sandbox)
     assert "consumer engine at the latest released version (v0.2.0)" in result.stdout, result.stdout + result.stderr
+    assert "direct push NOT disabled on the consumer engine clone" not in result.stdout, result.stdout + result.stderr
 
 
 # ── agent-doctor: Codex CLI known-bad-version check ──────────────────────

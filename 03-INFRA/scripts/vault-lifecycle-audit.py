@@ -27,14 +27,14 @@ SKIP_REL_DIRS = {
     "99-SECRETS/plaintext",
     "99-SECRETS/tmp",
 }
-GENERATED_DIRS = [
+DEFAULT_GENERATED_DIRS = (
     "03-INFRA/n8n-backup",
-    "01-ME/cv-artifacts",
-]
-KNOWN_NO_FRONTMATTER_PREFIXES = (
-    "01-ME/cv-artifacts/",
+)
+DEFAULT_NO_FRONTMATTER_PREFIXES = (
     "03-INFRA/agent-universal-layer/instructions/",
 )
+RELAXED_PREFIXES_FILE = "99-INDEX/vault-lifecycle-relaxed-prefixes.txt"
+GENERATED_DIRS_FILE = "99-INDEX/vault-lifecycle-generated-dirs.txt"
 HISTORICAL_HINTS = re.compile(
     r"(historical version|historical note|historical log|superseded|deprecated|"
     r"outdated|not canonical|do not use|legacy|retired|obsolete)",
@@ -122,6 +122,72 @@ def human_size(size: int) -> str:
     return f"{size}B"
 
 
+def normalize_prefix(value: str) -> str | None:
+    prefix = value.strip()
+    if not prefix or prefix.startswith("#"):
+        return None
+    prefix = prefix.replace("\\", "/").strip("/")
+    if not prefix:
+        return None
+    return f"{prefix}/"
+
+
+def normalize_relpath(value: str) -> str | None:
+    rel = value.strip()
+    if not rel or rel.startswith("#"):
+        return None
+    rel = rel.replace("\\", "/").strip("/")
+    return rel or None
+
+
+def load_relaxed_prefixes(root: Path = ROOT) -> tuple[str, ...]:
+    """Per-vault prefixes allowed to use local frontmatter schemas.
+
+    The public engine ships no private workflow assumptions. A private
+    vault can opt into relaxed checks with VAULT_LIFECYCLE_RELAXED_PREFIXES
+    or with 99-INDEX/vault-lifecycle-relaxed-prefixes.txt.
+    """
+    prefixes: list[str] = []
+
+    env_value = os.environ.get("VAULT_LIFECYCLE_RELAXED_PREFIXES", "")
+    for raw in env_value.split(os.pathsep):
+        prefix = normalize_prefix(raw)
+        if prefix:
+            prefixes.append(prefix)
+
+    config_path = root / RELAXED_PREFIXES_FILE
+    if config_path.is_file():
+        for raw in config_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            prefix = normalize_prefix(raw)
+            if prefix:
+                prefixes.append(prefix)
+
+    return tuple(dict.fromkeys(prefixes))
+
+
+def load_generated_dirs(root: Path = ROOT) -> tuple[str, ...]:
+    dirs: list[str] = list(DEFAULT_GENERATED_DIRS)
+
+    env_value = os.environ.get("VAULT_LIFECYCLE_GENERATED_DIRS", "")
+    for raw in env_value.split(os.pathsep):
+        rel = normalize_relpath(raw)
+        if rel:
+            dirs.append(rel)
+
+    config_path = root / GENERATED_DIRS_FILE
+    if config_path.is_file():
+        for raw in config_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            rel = normalize_relpath(raw)
+            if rel:
+                dirs.append(rel)
+
+    return tuple(dict.fromkeys(dirs))
+
+
+def is_relaxed(note: Note, prefixes: tuple[str, ...]) -> bool:
+    return bool(prefixes) and note.rel.startswith(prefixes)
+
+
 def print_section(title: str, rows: list[str], limit: int) -> None:
     print(f"\n## {title}")
     if not rows:
@@ -144,6 +210,9 @@ def main() -> int:
 
     today = datetime.strptime(args.today, "%Y-%m-%d").date()
     notes = iter_notes()
+    relaxed_prefixes = load_relaxed_prefixes()
+    generated_dirs = load_generated_dirs()
+    no_frontmatter_prefixes = DEFAULT_NO_FRONTMATTER_PREFIXES + tuple(f"{rel}/" for rel in generated_dirs)
 
     no_frontmatter: list[str] = []
     missing_status: list[str] = []
@@ -159,7 +228,7 @@ def main() -> int:
         if not note.has_frontmatter:
             if note.line_count >= args.large_lines:
                 large.append((note.line_count, note.rel))
-            if not note.rel.startswith(KNOWN_NO_FRONTMATTER_PREFIXES):
+            if not note.rel.startswith(no_frontmatter_prefixes):
                 no_frontmatter.append(note.rel)
             continue
 
@@ -169,17 +238,17 @@ def main() -> int:
 
         if status:
             status_counts[status] = status_counts.get(status, 0) + 1
-            if status not in {"active", "archive", "draft"} and not note.rel.startswith(("04-NOW/applied/", "04-NOW/colloqui/")):
+            if status not in {"active", "archive", "draft"} and not is_relaxed(note, relaxed_prefixes):
                 status_other.append(f"{status}\t{note.rel}")
         else:
             missing_status.append(note.rel)
 
-        if "type" not in note.frontmatter and not note.rel.startswith(("04-NOW/applied/", "04-NOW/colloqui/")):
+        if "type" not in note.frontmatter and not is_relaxed(note, relaxed_prefixes):
             missing_type.append(note.rel)
 
         note_date = parse_note_date(note)
         if note_date is None:
-            if not note.rel.startswith(("04-NOW/applied/", "04-NOW/colloqui/")):
+            if not is_relaxed(note, relaxed_prefixes):
                 missing_date.append(note.rel)
         else:
             age = (today - note_date).days
@@ -193,17 +262,21 @@ def main() -> int:
     print("KnowledgeVault lifecycle audit")
     print(f"Date: {today.isoformat()}")
     print(f"Markdown notes: {len(notes)}")
+    if relaxed_prefixes:
+        print("Relaxed prefixes: " + ", ".join(relaxed_prefixes))
+    if generated_dirs:
+        print("Generated dirs: " + ", ".join(generated_dirs))
     print("Status counts: " + ", ".join(f"{k}={v}" for k, v in sorted(status_counts.items())) if status_counts else "Status counts: none")
 
     payload_rows = []
-    for rel in GENERATED_DIRS:
+    for rel in generated_dirs:
         payload_rows.append(f"{human_size(dir_size(ROOT / rel))}\t{rel}")
     print_section("Generated or bulky payloads", payload_rows, args.limit)
     print_section("No frontmatter outside accepted generated paths", no_frontmatter, args.limit)
     print_section("Missing status", missing_status, args.limit)
-    print_section("Missing type outside CRM", missing_type, args.limit)
-    print_section("Missing review/update date outside CRM", missing_date, args.limit)
-    print_section("Non-standard status outside CRM", status_other, args.limit)
+    print_section("Missing type outside relaxed prefixes", missing_type, args.limit)
+    print_section("Missing review/update date outside relaxed prefixes", missing_date, args.limit)
+    print_section("Non-standard status outside relaxed prefixes", status_other, args.limit)
     print_section("Stale by review date", [row for _, row in sorted(stale, reverse=True)], args.limit)
     print_section("Large notes", [f"{lines} lines\t{rel}" for lines, rel in sorted(large, reverse=True)], args.limit)
     print_section("Historical or superseded hints near top", historical, args.limit)

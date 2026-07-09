@@ -29,6 +29,8 @@ No UI, no hosted dashboard, no proprietary memory store.
 It doesn't compete with a RAG builder or a workflow orchestrator.
 It assumes you already have opinions about which agents and tools you want, and gives them a shared, auditable floor to run on.
 
+NeXgen's public-engine safety gates are maintainer tooling, not an end-user chore. Normal users push only their private vault data. Checks such as `engine-push`, public-repo leak gates, and disabled direct push on an engine development clone matter only for people publishing changes to this GitHub repository.
+
 **What NeXgen does not do:** NeXgen governs configuration — one canonical source, generated derivatives, drift detection, single-door writes. It does **not** sit between an agent and its tools at runtime: `agent-doctor` cannot block a call made with hallucinated but valid-looking arguments. That boundary is enforced by your CLI harness (permission modes, user approval prompts) and by server-side validation in the MCP servers themselves (e.g., the `expected_hash` lock in `vault-library`).
 
 ## Core concepts

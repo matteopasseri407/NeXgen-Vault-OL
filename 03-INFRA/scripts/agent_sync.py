@@ -88,7 +88,7 @@ class Env:
         self.engine_root = Path(os.environ.get("AGENT_ENGINE_ROOT") or self._persisted_engine_root(default_engine_root) or str(default_engine_root))
         self.engine_scripts = self.engine_root / "scripts"
         self.ul = self.engine_root / "agent-universal-layer"
-        # Instance data (Matteo's own AGENTS.md, host-specific files): ALWAYS
+        # Instance data (the user's own AGENTS.md, host-specific files): ALWAYS
         # from vault_data, regardless of where the engine lives. The engine
         # only ships the generic/universal AGENTS.md template; the personal
         # instance is data, never something the engine repo should serve.

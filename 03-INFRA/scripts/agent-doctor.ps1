@@ -281,12 +281,13 @@ if (Test-Path -LiteralPath $settingsPath) {
 else { warn "Claude settings.json missing (Claude not installed here?)" }
 
 # Public engine repo - anti-leak gates (S0). Maintainer lane: these checks
-# only apply where a working clone of the public engine repo exists (the
-# machine that publishes engine code). Where none exists, this section is
-# skipped silently - a consumer-only install has nothing to verify here.
+# only apply when explicitly enabled by a contributor/maintainer that publishes
+# engine code. Normal end users never push this repo; they only publish their
+# private vault data.
 # Ported from agent-doctor.sh (bash never had a Windows twin for this).
 $EngineRepo = if ($env:ENGINE_REPO) { $env:ENGINE_REPO } else { Join-Path $HomeDir "NeXgen-Vault-OL" }
-if (Test-Path -LiteralPath (Join-Path $EngineRepo ".git")) {
+$EngineMaintainer = if ($env:NEXGEN_ENGINE_MAINTAINER) { $env:NEXGEN_ENGINE_MAINTAINER } else { "0" }
+if (($EngineMaintainer -eq "1") -and (Test-Path -LiteralPath (Join-Path $EngineRepo ".git"))) {
   sec "Public engine repo - anti-leak gates (S0)"
   $pushUrl = (& git -C $EngineRepo config --get remote.origin.pushurl 2>$null)
   if ("$pushUrl".StartsWith("PUSH-DISABLED")) { ok "direct push disabled on the engine clone ($EngineRepo)" }
@@ -327,9 +328,11 @@ if (Test-Path -LiteralPath (Join-Path $ConsumerEngineRepo ".git")) {
     if ($pinSha -eq $liveSha) { ok "consumer engine at the pinned version ($liveShort)" }
     else { bad "consumer engine at $liveShort, pin expects $pinShort - silent drift: pull was skipped, or the pin wasn't updated after a deliberate upgrade" }
   } else { warn "no engine pin set ($pinFile missing) - consumer engine version isn't tracked yet" }
-  $pushUrl2 = (& git -C $ConsumerEngineRepo config --get remote.origin.pushurl 2>$null)
-  if ("$pushUrl2".StartsWith("PUSH-DISABLED")) { ok "direct push disabled on the consumer engine clone" }
-  else { bad "direct push NOT disabled on the consumer engine clone: git -C $ConsumerEngineRepo remote set-url --push origin PUSH-DISABLED-use-engine-push" }
+  if ($EngineMaintainer -eq "1") {
+    $pushUrl2 = (& git -C $ConsumerEngineRepo config --get remote.origin.pushurl 2>$null)
+    if ("$pushUrl2".StartsWith("PUSH-DISABLED")) { ok "direct push disabled on the consumer engine clone" }
+    else { bad "direct push NOT disabled on the consumer engine clone: git -C $ConsumerEngineRepo remote set-url --push origin PUSH-DISABLED-use-engine-push" }
+  }
 
   # New-version-available check (B3, informational only, never auto-updates).
   # Fetch is read-only (only moves remote-tracking refs/tags), safe even

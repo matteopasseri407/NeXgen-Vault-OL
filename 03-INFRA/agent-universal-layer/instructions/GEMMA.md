@@ -29,7 +29,7 @@ Use the vault as memory conceptually, but do not preload broad context. If the t
 
 1. `00-START-HERE.md`
 2. `04-NOW/current-focus.md`
-3. one narrow note from `01-ME`, `02-PROJECTS`, `03-INFRA`, or `04-NOW`
+3. one narrow note from `01-NOTES`, `02-PROJECTS`, `03-INFRA`, or `04-NOW`
 
 Do not store secrets or raw debug logs in memory. If asked whether something should be saved, prefer durable final state, decisions, commands, rollback notes, and remaining risks.
 

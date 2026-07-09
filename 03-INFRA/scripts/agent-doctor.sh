@@ -392,11 +392,12 @@ else
 fi
 
 # Public engine repo — anti-leak gates (S0). Maintainer lane: these checks
-# only apply where a working clone of the public engine repo exists (the
-# machine that publishes engine code). On machines without one, the whole
-# section is skipped silently — a consumer install has nothing to verify here.
+# only apply when explicitly enabled by a contributor/maintainer that publishes
+# engine code. Normal end users never push this repo; they only publish their
+# private vault data.
 ENGINE_REPO="${ENGINE_REPO:-$HOME/NeXgen-Vault-OL}"
-if [ -d "$ENGINE_REPO/.git" ]; then
+ENGINE_MAINTAINER="${NEXGEN_ENGINE_MAINTAINER:-0}"
+if [ "$ENGINE_MAINTAINER" = 1 ] && [ -d "$ENGINE_REPO/.git" ]; then
   sec "Public engine repo — anti-leak gates (S0)"
   pushurl=$(git -C "$ENGINE_REPO" config --get remote.origin.pushurl 2>/dev/null || echo "")
   case "$pushurl" in
@@ -453,11 +454,13 @@ if [ -d "$CONSUMER_ENGINE_REPO/.git" ]; then
   else
     warn "no engine pin set ($PIN_FILE missing) — consumer engine version isn't tracked yet, run: git -C $CONSUMER_ENGINE_REPO rev-parse HEAD > $PIN_FILE"
   fi
-  pushurl=$(git -C "$CONSUMER_ENGINE_REPO" config --get remote.origin.pushurl 2>/dev/null || echo "")
-  case "$pushurl" in
-    PUSH-DISABLED*) ok "direct push disabled on the consumer engine clone" ;;
-    *) fail "direct push NOT disabled on the consumer engine clone: git -C $CONSUMER_ENGINE_REPO remote set-url --push origin PUSH-DISABLED-use-engine-push" ;;
-  esac
+  if [ "$ENGINE_MAINTAINER" = 1 ]; then
+    pushurl=$(git -C "$CONSUMER_ENGINE_REPO" config --get remote.origin.pushurl 2>/dev/null || echo "")
+    case "$pushurl" in
+      PUSH-DISABLED*) ok "direct push disabled on the consumer engine clone" ;;
+      *) fail "direct push NOT disabled on the consumer engine clone: git -C $CONSUMER_ENGINE_REPO remote set-url --push origin PUSH-DISABLED-use-engine-push" ;;
+    esac
+  fi
 
   # New-version-available check (B3, informational only, never auto-updates).
   # Fetch is read-only (only moves remote-tracking refs/tags), safe to run

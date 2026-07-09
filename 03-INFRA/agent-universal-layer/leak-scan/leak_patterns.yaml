@@ -41,7 +41,12 @@ leak_allow:
   # Generic placeholders used in docs (e.g. USER-PROFILE.md), not a real path
   # (found as a real false positive during S0 testing, 2026-07-08).
   - '/home/user\b'
+  # Generic container image home for the official n8n image, not a maintainer
+  # workstation path (found by full-tree audit, 2026-07-09).
+  - '/home/node\b'
   - 'C:\\Users\\user\b'
+  # Generic 15 MiB upload/body limit used in OCR examples, not an ID or phone.
+  - '^15728640$'
   # Git's null SHA (40 zeros, used to detect a new/deleted branch in a
   # push/webhook): a degenerate value, not a secret (found as a false
   # positive in the gate's own commit, S0 2026-07-08).
