@@ -410,6 +410,24 @@ if [ -d "$CONSUMER_ENGINE_REPO/.git" ]; then
     PUSH-DISABLED*) ok "direct push disabled on the consumer engine clone" ;;
     *) fail "direct push NOT disabled on the consumer engine clone: git -C $CONSUMER_ENGINE_REPO remote set-url --push origin PUSH-DISABLED-use-engine-push" ;;
   esac
+
+  # New-version-available check (B3, informational only, never auto-updates).
+  # Fetch is read-only (only moves remote-tracking refs/tags), safe to run
+  # here even though this machine never auto-upgrades the pinned commit.
+  git -C "$CONSUMER_ENGINE_REPO" fetch --quiet --tags origin >/dev/null 2>&1
+  latest_tag=$(git -C "$CONSUMER_ENGINE_REPO" tag --merged origin/main --sort=-v:refname 2>/dev/null | head -1)
+  if [ -n "$latest_tag" ] && [ -n "$live_sha" ]; then
+    current_version=$(git -C "$CONSUMER_ENGINE_REPO" show "$live_sha:VERSION" 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$current_version" ]; then
+      if [ "v$current_version" != "$latest_tag" ]; then
+        warn "new engine version available: $latest_tag (pinned: v$current_version) -- see docs/upgrade.md, update is always deliberate"
+      else
+        ok "consumer engine at the latest released version ($latest_tag)"
+      fi
+    else
+      warn "new engine version available: $latest_tag (pinned commit predates the VERSION file) -- see docs/upgrade.md"
+    fi
+  fi
 fi
 
 if [ "$QUIET" = 1 ]; then

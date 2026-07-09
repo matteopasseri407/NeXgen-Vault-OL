@@ -34,6 +34,7 @@ import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import Callable
 
 IS_WINDOWS = platform.system() == "Windows"
 
@@ -305,6 +306,69 @@ def _git(env: Env, *args: str, timeout: int = 30) -> subprocess.CompletedProcess
                                capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return subprocess.CompletedProcess(args, 1, "", str(exc))
+
+
+# ── 0.5 data_migrations ──────────────────────────────────────────────────
+# Schema version of the DATA the engine reads (manifest.yaml,
+# skills.manifest.yaml, USER-PROFILE.md, ...) -- separate from the engine's
+# own release version (VERSION file). Bump TARGET_SCHEMA_VERSION and add an
+# entry to MIGRATIONS whenever a future engine release needs to reshape an
+# existing data file. Today's data shape IS version 1: MIGRATIONS is empty
+# on purpose, not a stub -- there is nothing to migrate from yet.
+TARGET_SCHEMA_VERSION = 1
+
+# from_version -> callable(env) that migrates from_version to from_version+1
+# and returns the list of paths it modified. Each migration is responsible
+# for calling _backup_before_migration(env, [affected_paths]) itself BEFORE
+# writing anything, then applying the change, then returning the touched
+# paths. Populate this dict in future releases; keep it empty otherwise.
+MIGRATIONS: dict[int, Callable[["Env"], list[Path]]] = {}
+
+
+def _backup_before_migration(env: Env, paths: list[Path]) -> None:
+    """Same .bak-<timestamp> + keep-3 convention as render.py's backups.
+    A migration function must call this BEFORE writing, on the pre-migration
+    content -- never after, or the backup would just be a copy of the new
+    (already migrated) file."""
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    for path in paths:
+        if not path.is_file():
+            continue
+        bak = path.with_name(path.name + ".bak-" + ts)
+        shutil.copy2(path, bak)
+        backs = sorted(path.parent.glob(path.name + ".bak-*"))
+        for stale in backs[:-3]:
+            stale.unlink(missing_ok=True)
+
+
+def data_migrations(env: Env) -> None:
+    schema_file = env.vault_data / "99-INDEX" / "DATA-SCHEMA-VERSION.txt"
+    if schema_file.is_file():
+        try:
+            current = int(schema_file.read_text(encoding="utf-8").strip() or "0")
+        except ValueError:
+            env.log(f"data-migrations: {schema_file} has non-numeric content, leaving data untouched")
+            return
+    else:
+        # No marker yet: today's data shape already IS the target version,
+        # there is nothing to migrate -- just stamp the baseline.
+        current = TARGET_SCHEMA_VERSION
+
+    if current > TARGET_SCHEMA_VERSION:
+        env.log(f"data-migrations: data schema v{current} is newer than this engine supports (v{TARGET_SCHEMA_VERSION}) -- leaving data untouched, upgrade the engine")
+        return
+
+    while current < TARGET_SCHEMA_VERSION:
+        step = MIGRATIONS.get(current)
+        if step is None:
+            env.log(f"data-migrations: no migration registered for v{current} -> v{current + 1}, stopping (data left at v{current})")
+            return
+        touched = step(env)
+        env.log(f"data-migrations: applied v{current} -> v{current + 1}, touched {touched}")
+        current += 1
+
+    if _write_if_different(schema_file, f"{TARGET_SCHEMA_VERSION}\n"):
+        env.log(f"data-migrations: stamped {schema_file} at v{TARGET_SCHEMA_VERSION}")
 
 
 # ── 1. pull ──────────────────────────────────────────────────────────────
@@ -1034,6 +1098,7 @@ def main(argv: list[str] | None = None) -> int:
         pull(env)
 
     if flags["apply"]:
+        data_migrations(env)
         instructions(env)
         antigravity_mcp(env)
         utils(env)

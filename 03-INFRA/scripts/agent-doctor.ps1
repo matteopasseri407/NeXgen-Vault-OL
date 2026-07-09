@@ -263,6 +263,20 @@ if (Test-Path -LiteralPath (Join-Path $ConsumerEngineRepo ".git")) {
   $pushUrl2 = (& git -C $ConsumerEngineRepo config --get remote.origin.pushurl 2>$null)
   if ("$pushUrl2".StartsWith("PUSH-DISABLED")) { ok "direct push disabled on the consumer engine clone" }
   else { bad "direct push NOT disabled on the consumer engine clone: git -C $ConsumerEngineRepo remote set-url --push origin PUSH-DISABLED-use-engine-push" }
+
+  # New-version-available check (B3, informational only, never auto-updates).
+  # Fetch is read-only (only moves remote-tracking refs/tags), safe even
+  # though this machine never auto-upgrades the pinned commit.
+  & git -C $ConsumerEngineRepo fetch --quiet --tags origin 2>$null | Out-Null
+  $latestTag = (& git -C $ConsumerEngineRepo tag --merged origin/main --sort=-v:refname 2>$null | Select-Object -First 1)
+  if ($latestTag -and $liveSha) {
+    $currentVersion = (& git -C $ConsumerEngineRepo show "${liveSha}:VERSION" 2>$null)
+    if ($currentVersion) { $currentVersion = $currentVersion.Trim() }
+    if ($currentVersion) {
+      if ("v$currentVersion" -ne $latestTag) { warn "new engine version available: $latestTag (pinned: v$currentVersion) - see docs/upgrade.md, update is always deliberate" }
+      else { ok "consumer engine at the latest released version ($latestTag)" }
+    } else { warn "new engine version available: $latestTag (pinned commit predates the VERSION file) - see docs/upgrade.md" }
+  }
 }
 
 if ($Summary) {
