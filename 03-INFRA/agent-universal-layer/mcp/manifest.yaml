@@ -23,10 +23,13 @@ servers:
 
   # ---- backbone (present in every CLI, always) ------------------------
 
+  # npx resolves an exact package version.  Update a pin only after testing
+  # it deliberately, then keep the previous engine pin available for rollback.
+
   playwright:
     transport: stdio
     command: npx
-    args: ["-y", "@playwright/mcp@latest", "--cdp-endpoint", "http://localhost:9222"]
+    args: ["-y", "@playwright/mcp@0.0.78", "--cdp-endpoint", "http://localhost:9222"]
     targets: [claude, codex, antigravity, opencode]
 
   # ---- self-hosted backend (Cloud-Server mode only) --------------------
@@ -37,7 +40,7 @@ servers:
   firecrawl:
     transport: stdio
     command: npx
-    args: ["-y", "firecrawl-mcp"]
+    args: ["-y", "firecrawl-mcp@3.22.3"]
     env:
       FIRECRAWL_API_URL: "http://127.0.0.1:${FIRECRAWL_TUNNEL_PORT:-33002}"
     require_env: FIRECRAWL_TUNNEL_PORT
@@ -80,11 +83,11 @@ servers:
   filesystem:
     transport: stdio
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "${HOME}"]
+    args: ["-y", "@modelcontextprotocol/server-filesystem@2026.7.10", "${HOME}"]
     targets: [codex]
 
   memory:
     transport: stdio
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-memory"]
+    args: ["-y", "@modelcontextprotocol/server-memory@2026.7.4"]
     targets: [codex]

@@ -43,6 +43,10 @@ VAULT_DATA = Path(os.environ.get("AGENT_VAULT_DATA") or str(HOME / "KnowledgeVau
 MANIFEST = VAULT_DATA / "03-INFRA" / "agent-universal-layer" / "mcp" / "manifest.yaml"
 IS_WINDOWS = platform.system() == "Windows"
 
+# Antigravity reaches HTTP MCP servers through this local bridge.  It is
+# intentionally exact: an implicit npx update would run new code as the user.
+MCP_REMOTE_PACKAGE = "mcp-remote@0.1.38"
+
 SECRET_KEY = re.compile(r"(token|secret|password|authorization|bearer|api[_-]?key|cookie)", re.I)
 LONGTOK = re.compile(r"^[A-Za-z0-9_\-\.=+/]{40,}$")
 
@@ -92,7 +96,7 @@ def r_antigravity(name, s):
     if s["transport"] == "stdio":
         return {"command": s["command"], "args": s.get("args", []), "env": s.get("env", {})}
     hdr = f"Authorization: Bearer ${{{s['auth']['env']}}}"
-    return {"command": "npx", "args": ["-y", "mcp-remote", s["url"], "--header", hdr], "env": {}}
+    return {"command": "npx", "args": ["-y", MCP_REMOTE_PACKAGE, s["url"], "--header", hdr], "env": {}}
 
 def r_opencode(name, s):
     if s["transport"] == "stdio":

@@ -25,7 +25,7 @@ In a **Local-Only setup** (no remote backend), Firecrawl is absent. The CLI's na
 
 ## How agents reach it
 
-- **MCP `firecrawl`** (the only path for agents): `npx -y firecrawl-mcp`, env `FIRECRAWL_API_URL=http://127.0.0.1:<firecrawl-tunnel-port>`. Tools: `firecrawl_scrape`, `firecrawl_search`, `firecrawl_map`, `firecrawl_crawl`, `firecrawl_extract`.
+- **MCP `firecrawl`** (the only path for agents): the generated config runs the exact `firecrawl-mcp@3.22.3` pin from `agent-universal-layer/mcp/manifest.yaml`, with `FIRECRAWL_API_URL=http://127.0.0.1:<firecrawl-tunnel-port>`. Tools: `firecrawl_scrape`, `firecrawl_search`, `firecrawl_map`, `firecrawl_crawl`, `firecrawl_extract`.
 - **Wrapper `firecrawl-local`** (only for L0/deterministic scripts, no MCP): calls `/v2/scrape` and `/v2/search` defaulting to the tunnel URL. Source: `03-INFRA/scripts/firecrawl-local.sh`.
 
 ## Health check (before concluding "Firecrawl is down")

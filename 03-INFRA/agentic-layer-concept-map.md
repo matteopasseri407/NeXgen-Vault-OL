@@ -47,7 +47,7 @@ The user runs one agent system across multiple CLIs and machines that must act a
 ## The three planes
 
 1. **Behaviour** — `AGENTS.md` is the single bootstrap. Every CLI's pointer file references it. One file, every agent, drift impossible.
-2. **Config** — `mcp/manifest.yaml` describes every MCP server once; `render.py` translates it into each CLI's dialect. `skills/skills.manifest.yaml` does the same for skills, materialized by `skills-sync.py`.
+2. **Config** — `mcp/manifest.yaml` describes every MCP server once; `render.py` translates it into each CLI's dialect. Every local MCP package launched through `npx` has an exact version pin, so an upgrade is a tested engine change rather than an implicit upstream update. `skills/skills.manifest.yaml` does the same for skills, materialized by `skills-sync.py`.
 3. **Memory** — the KnowledgeVault (markdown notes, Git-backed). Written through one door per type: notes via the `vault-library` MCP, infra files via `vault-push`.
 
 ## Why one source

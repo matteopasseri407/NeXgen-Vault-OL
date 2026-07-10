@@ -85,3 +85,14 @@ is the baseline this mechanism starts counting from.
 - A data migration never runs against a schema version newer than what the
   installed engine understands — if that happens (e.g. you rolled the
   engine back), `agent-sync` leaves your data untouched and logs why.
+
+## MCP package pins
+
+The engine runs local MCP packages through exact `npx` versions. The pins live
+in `03-INFRA/agent-universal-layer/mcp/manifest.yaml`, with the Antigravity
+HTTP bridge pinned in `mcp/render.py`.
+
+Do not replace a pin with `latest`. Test one package update in a disposable
+setup, run the engine checks, then publish the engine change. If the new
+package causes a regression, return the consumer clone and `ENGINE-PIN.txt`
+to the previous engine commit.
