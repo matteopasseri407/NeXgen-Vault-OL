@@ -48,6 +48,52 @@ def test_agent_sync_python_accepts_legacy_powershell_mode_flag(sandbox):
     assert "unknown mode" not in proc.stderr
 
 
+def test_posix_utils_links_council_launcher(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", False)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+
+    env = mod.Env()
+    mod.utils(env)
+
+    launcher = sandbox.home / ".local" / "bin" / "council"
+    assert launcher.is_symlink()
+    assert launcher.resolve() == (sandbox.scripts_dir / "council.sh").resolve()
+
+
+def test_posix_utils_does_not_change_the_engine_source_mode(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", False)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+    source = sandbox.scripts_dir / "council.sh"
+    source.chmod(0o644)
+
+    env = mod.Env()
+    mod.utils(env)
+
+    assert source.stat().st_mode & 0o777 == 0o644
+    assert not (sandbox.home / ".local" / "bin" / "council").exists()
+
+
+def test_windows_utils_installs_council_command_wrapper(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("USERPROFILE", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+
+    env = mod.Env()
+    mod.utils(env)
+
+    launcher = sandbox.home / ".local" / "bin" / "council.ps1"
+    wrapper = sandbox.home / ".local" / "bin" / "council.cmd"
+    assert launcher.exists()
+    assert launcher.resolve() == (sandbox.scripts_dir / "council.ps1").resolve()
+    assert 'council.ps1' in wrapper.read_text(encoding="utf-8")
+
+
 def test_windows_file_copy_fallback_is_idempotent(sandbox, monkeypatch):
     mod = load_agent_sync_module(sandbox)
     monkeypatch.setattr(mod, "IS_WINDOWS", True)

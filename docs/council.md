@@ -7,7 +7,7 @@ cross-vendor code review. It is explicit Python code, not an LLM, that
 decides who speaks and when.
 
 It is an optional expansion. With no `seats.yaml` configured it is
-completely inert — nothing about the rest of the engine depends on it.
+completely inert. Nothing about the rest of the engine depends on it.
 
 ## Setup
 
@@ -22,74 +22,90 @@ completely inert — nothing about the rest of the engine depends on it.
    somewhere else). This file is your data, never committed to the engine.
 2. Edit it: pick the seats you have, following the comments in the
    template. Each seat needs `vendor`, `cli`, and `model`; `cli` must be one
-   of `opencode`, `agy`, `codex` — those are the only CLIs `council.py`
-   knows how to invoke today. `zero_retention: true` only if you've
+   of `opencode`, `agy`, `codex`. Those are the only CLIs `council.py`
+   knows how to invoke today. Set `zero_retention: true` only if you've
    confirmed that with a primary source (the provider's own privacy page),
    not a summary.
-3. Run any command below. Without a valid `seats.yaml`, `council` stops and
-   tells you exactly what's missing.
+3. In a MULTI setup, run `agent-sync apply` once to install the `council`
+   launcher on Linux and the `council.cmd` wrapper on Windows.
+   Then run any command below.
+   Without a valid `seats.yaml`, Council stops and reports what is missing.
+   In a MINIMAL setup, or if the launcher is not on your `PATH`, replace
+   `council` below with `python3 03-INFRA/agent-universal-layer/council/council.py`.
 
 ## The four modes
 
 Every seat is called "without hands": it receives text and returns text,
 never filesystem or shell access, regardless of which CLI is behind it.
 
-**Brainstorm** — one seat, 1+ rounds, each round after the first must attack
+**Brainstorm.** One seat, 1+ rounds. Each round after the first must attack
 its own previous conclusion instead of just restating it:
 ```bash
-python3 03-INFRA/agent-universal-layer/council/council.py brainstorm \
+council brainstorm \
   "Should we cache this at the edge or the origin?" \
   --context notes.md --rounds 2 --seat gemini
 ```
 
-**Challenge** — one seat tries to find the dominant flaw in a plan; `APPROVE`
+**Challenge.** One seat tries to find the dominant flaw in a plan. `APPROVE`
 is made costly (it has to rule out at least two risk categories explicitly,
 or it doesn't count):
 ```bash
-python3 03-INFRA/agent-universal-layer/council/council.py challenge \
+council challenge \
   "Single cron job tars the data dir nightly to one S3 bucket." --seat gemini
 ```
 
-**Code review** — cross-vendor by construction: it refuses to run if
+**Code review.** It refuses to run if
 `--author-vendor` matches the seat's own vendor:
 ```bash
-python3 03-INFRA/agent-universal-layer/council/council.py code-review \
+council code-review \
   changes.diff --author-vendor anthropic --seat gemini
 ```
 
-**Relay** — a sequential staffage of up to 5 stages (e.g.
+**Relay.** A sequential staffage of up to 5 stages, for example
 architect→builder→reviewer→judge), each stage seeing the full original
 brief plus the previous stage's output quoted as untrusted data, never as
 an instruction. Today only `opencode` seats can take part in a relay
 sequence; `agy`/`codex` seats work in the other three modes but not yet
 here.
 ```bash
-python3 03-INFRA/agent-universal-layer/council/council.py relay \
+council relay \
   "Design a rate limiter for the public API." \
   --sequence "architect=glm,builder=qwen,reviewer=deepseek-free"
 ```
 
 Every mode accepts `--context FILE` for extra background and
 `--allow-training-risk` to use a seat that lacks a confirmed zero-retention
-guarantee — only for non-sensitive technical checks, never for a real brief.
+guarantee. Use it only for non-sensitive technical checks, never for a real brief.
 
-## Where sessions go
+## Session handling
 
-Each invocation writes to
-`~/.local/state/council/sessions/council-<slug>-<timestamp>/`: the brief,
-one file per round/stage, and a final `verdict.md`. Nothing is written into
-the vault except what you choose to copy out yourself.
+Council creates a private working directory for the brief, per-stage output,
+and the final verdict.
+It removes that directory after returning a result, and after an error, unless
+you pass `--keep-session`.
+On POSIX, kept session directories use mode `700` and their files use `600`.
+Council removes expired kept sessions when it starts.
+Nothing is written into the vault automatically.
+If a result matters later, save a short decision or diagnosis through your
+normal vault workflow, not the raw Council transcript.
 
 ```bash
-council.py clean                 # removes sessions older than 7 days
-council.py clean --ttl-days 1    # custom retention
-council.py clean --all           # wipes every session now
+council brainstorm "Review this plan" --keep-session
+```
+
+```bash
+council clean                 # removes kept sessions older than 7 days
+council clean --ttl-days 1    # custom retention
+council clean --all           # removes every kept session now
 ```
 
 ## Guardrails
 
-- **Egress**: every context/diff file is scanned for likely secrets before
-  it reaches a seat. A match stops the call before anything is sent.
+- **Egress**: the original brief, including context and diffs, is scanned for
+  likely secrets before any seat receives it. A match stops the call.
+- **Generated output**: if a seat emits a value that looks like a secret,
+  Council redacts the affected line before it reaches the next relay stage or
+  a kept session. The relay can continue with the remaining analysis.
 - **Zero-retention**: a seat without `zero_retention: true` in your
   `seats.yaml` refuses to run unless you pass `--allow-training-risk`.
 - **Quota**: `--max-rounds` (brainstorm) and `--max-seats` (relay) cap how
@@ -97,12 +113,17 @@ council.py clean --all           # wipes every session now
 
 ## Current limitations
 
-- `codex` seats are implemented but not yet verified live end-to-end (no
-  OpenAI quota available at the time this was wired in) — code-reviewed
-  only. `opencode` and `agy` seats are verified live on all three
+- `codex` seats are implemented but not yet verified live end-to-end because
+  no OpenAI quota was available when they were wired in. They have only a
+  code review. `opencode` and `agy` seats are verified live on all three
   non-relay modes.
-- Automated regression tests currently cover only the `relay` mode.
-  `brainstorm`/`challenge`/`code-review` are exercised live in this repo's
-  history but are not yet under CI.
+- Automated regression tests cover the control flow for all four modes,
+  session cleanup, relay fallback, and the Linux launcher. They use fake
+  seats, so they do not replace live checks of each vendor CLI.
+- The Windows launcher has a portable regression test, but still needs a
+  physical Windows run before this Alpha feature can be called cross-platform.
+- Large prompts still need a per-CLI transport design that avoids command-line
+  limits. Council rejects unsafe sizes rather than letting the operating system
+  fail with an opaque error.
 - Seats via CLI are slow (minutes, not seconds): this is for brainstorming,
   challenging, and review, not a quick question mid-task.

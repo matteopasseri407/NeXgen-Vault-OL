@@ -134,7 +134,10 @@ def _copy_engine_scripts(sandbox: Sandbox) -> None:
     (sandbox.ul / "hooks").mkdir(parents=True, exist_ok=True)
 
     shutil.copy2(REAL_UL / "mcp" / "render.py", sandbox.mcp_dir / "render.py")
-    for name in ("agent-sync.sh", "agent_sync.py", "skills-sync.py", "agent-doctor.sh"):
+    for name in (
+        "agent-sync.sh", "agent_sync.py", "skills-sync.py", "agent-doctor.sh",
+        "council.sh", "council.ps1",
+    ):
         dst = sandbox.scripts_dir / name
         shutil.copy2(REAL_SCRIPTS / name, dst)
         dst.chmod(dst.stat().st_mode | stat.S_IEXEC)

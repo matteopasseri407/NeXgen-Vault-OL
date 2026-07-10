@@ -562,7 +562,9 @@ def antigravity_mcp(env: Env) -> None:
 def _link_util(src: Path, dst: Path, env: Env, label: str) -> None:
     if not src.is_file():
         return
-    os.chmod(src, os.stat(src).st_mode | 0o111)
+    if not IS_WINDOWS and not (src.stat().st_mode & 0o111):
+        env.log(f"utils: source {src} is not executable, refusing to mutate an engine source")
+        return
     try:
         same = dst.is_symlink() and dst.resolve() == src.resolve()
     except OSError:
@@ -577,24 +579,29 @@ def utils(env: Env) -> None:
     env.local_bin.mkdir(parents=True, exist_ok=True)
     if not IS_WINDOWS:
         _link_util(env.engine_scripts / "agent-now.sh", env.local_bin / "agent-now", env, "agent-now")
+        _link_util(env.engine_scripts / "council.sh", env.local_bin / "council", env, "council")
         _link_util(env.vault_scripts / "vault-push.sh", env.local_bin / "vault-push", env, "vault-push")
         _link_util(env.vault_scripts / "vault-ocr-local.sh", env.local_bin / "vault-ocr-local", env, "vault-ocr-local")
         return
-    src = env.engine_scripts / "agent-now.ps1"
-    if not src.is_file():
-        env.log(f"utils: missing source {src}")
-        return
-    dst = env.local_bin / "agent-now.ps1"
-    try:
-        same = dst.is_symlink() and dst.resolve() == src.resolve()
-    except OSError:
-        same = False
-    if not same:
-        make_link(src, dst, is_dir=False)
-        env.log("utils: relinked agent-now.ps1")
-    wrapper = "@echo off\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0agent-now.ps1\" %*\r\n"
-    if _write_if_different(env.local_bin / "agent-now.cmd", wrapper):
-        env.log("utils: installed agent-now.cmd wrapper")
+    for name in ("agent-now", "council"):
+        src = env.engine_scripts / f"{name}.ps1"
+        if not src.is_file():
+            env.log(f"utils: missing source {src}")
+            continue
+        dst = env.local_bin / f"{name}.ps1"
+        try:
+            same = dst.is_symlink() and dst.resolve() == src.resolve()
+        except OSError:
+            same = False
+        if not same:
+            make_link(src, dst, is_dir=False)
+            env.log(f"utils: relinked {name}.ps1")
+        wrapper = (
+            "@echo off\r\n"
+            f"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0{name}.ps1\" %*\r\n"
+        )
+        if _write_if_different(env.local_bin / f"{name}.cmd", wrapper):
+            env.log(f"utils: installed {name}.cmd wrapper")
 
 
 def local_model_runtime(env: Env) -> None:

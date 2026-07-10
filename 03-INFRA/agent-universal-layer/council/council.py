@@ -27,6 +27,14 @@ DEFAULT_MAX_SEATS = 5
 SEAT_TIMEOUT_SECONDS = 300
 SHORT_QUARANTINE_SECONDS = 5 * 60
 EXTENDED_QUARANTINE_SECONDS = 15 * 60
+RETRYABLE_SEAT_ERROR_KINDS = frozenset({
+    "empty_response",
+    "invocation",
+    "no_output_timeout",
+    "partial_timeout",
+    "process_error",
+    "seat_error",
+})
 
 
 class SeatRunError(RuntimeError):
@@ -250,6 +258,36 @@ def egress_gate(text: str) -> None:
         sys.exit(1)
 
 
+def redact_generated_output(text: str) -> tuple[str, bool]:
+    """Redact suspicious model output before it reaches another seat or disk.
+
+    The original brief is a hard gate and must never leave the process with a
+    possible secret. A model can still hallucinate something that resembles a
+    secret. That output is not a reason to discard an otherwise useful relay:
+    remove the affected lines and keep the remaining analysis moving.
+    """
+    leak_scan = _load_leak_scan()
+    patterns, allow = leak_scan.load_patterns(LEAK_SCAN_DIR / "leak_patterns.yaml")
+    lines = text.splitlines(keepends=True)
+    units = [
+        leak_scan.Unit("generated output", index, line.rstrip("\r\n"))
+        for index, line in enumerate(lines, 1)
+    ]
+    findings = leak_scan.scan_units(units, patterns, allow, [])
+    blocked_lines = {finding.lineno for finding in findings if finding.blocking}
+    if not blocked_lines:
+        return text, False
+
+    redacted: list[str] = []
+    for index, line in enumerate(lines, 1):
+        if index not in blocked_lines:
+            redacted.append(line)
+            continue
+        newline = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+        redacted.append(f"[REDACTED POSSIBLE SECRET]{newline}")
+    return "".join(redacted), True
+
+
 def _quote_untrusted(text: str) -> str:
     return "\n".join(f"> {line}" if line else ">" for line in text.splitlines())
 
@@ -397,6 +435,75 @@ def build_brief(question: str | None, context_path: str | None, diff_path: str |
     return "\n".join(parts)
 
 
+def _set_private_mode(path: Path, mode: int) -> None:
+    """Apply POSIX privacy modes where the platform supports them."""
+    if os.name == "nt":
+        return
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+
+
+def _write_private_text(path: Path, text: str) -> None:
+    """Write a session artefact without first exposing it to the umask."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        if os.name != "nt":
+            os.fchmod(fd, 0o600)
+    except Exception:
+        os.close(fd)
+        raise
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+
+
+def _secure_session_tree(session_dir: Path) -> None:
+    """Tighten known session artefacts after a kept debug run."""
+    if os.name == "nt" or not session_dir.exists():
+        return
+    for path in sorted(session_dir.rglob("*"), reverse=True):
+        _set_private_mode(path, 0o700 if path.is_dir() else 0o600)
+    _set_private_mode(session_dir, 0o700)
+
+
+def _cleanup_sessions(ttl_days: int, *, remove_all: bool = False, announce: bool = False) -> int:
+    if not SESSIONS_DIR.is_dir():
+        return 0
+    cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
+    removed = 0
+    for session_dir in sorted(SESSIONS_DIR.iterdir()):
+        if not session_dir.is_dir():
+            continue
+        if not remove_all:
+            try:
+                mtime = datetime.fromtimestamp(session_dir.stat().st_mtime, tz=timezone.utc)
+            except OSError:
+                continue
+            if mtime >= cutoff:
+                continue
+        try:
+            shutil.rmtree(session_dir)
+        except OSError as exc:
+            if announce:
+                print(f"[council] non riesco a rimuovere {session_dir.name}: {exc}")
+            continue
+        removed += 1
+        if announce:
+            print(f"[council] rimossa: {session_dir.name}")
+    return removed
+
+
+def _finalize_session(session_dir: Path, keep_session: bool) -> None:
+    if keep_session:
+        _secure_session_tree(session_dir)
+        return
+    try:
+        shutil.rmtree(session_dir)
+    except OSError as exc:
+        print(f"[council] ATTENZIONE: cleanup della sessione fallito ({exc}).")
+
+
 def new_session_dir(label: str) -> Path:
     """mkdir SENZA exist_ok: due invocazioni con lo stesso label nello stesso
     secondo (timestamp con risoluzione al secondo) non devono mai condividere
@@ -404,13 +511,16 @@ def new_session_dir(label: str) -> Path:
     collisione si riprova con un suffisso random finche' non se ne trova una
     libera (verificato dal vivo: senza questo, due sessioni ravvicinate con lo
     stesso label finiscono nella stessa directory)."""
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    _cleanup_sessions(DEFAULT_TTL_DAYS)
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _set_private_mode(SESSIONS_DIR, 0o700)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     base_name = f"council-{slugify(label)}-{timestamp}"
     session_dir = SESSIONS_DIR / base_name
     while True:
         try:
-            session_dir.mkdir(parents=True, exist_ok=False)
+            session_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
+            _set_private_mode(session_dir, 0o700)
             return session_dir
         except FileExistsError:
             session_dir = SESSIONS_DIR / f"{base_name}-{os.urandom(3).hex()}"
@@ -589,8 +699,8 @@ def run_seat(seat: dict, prompt: str, session_dir: Path) -> tuple[str, dict]:
 
 
 def extract_verdict(text: str) -> str:
-    match = VERDICT_RE.search(text)
-    return match.group(1).upper() if match else "(assente)"
+    matches = VERDICT_RE.findall(text)
+    return matches[-1].upper() if matches else "(assente)"
 
 
 def run_rounds(
@@ -607,7 +717,7 @@ def run_rounds(
         except SeatRunError as e:
             sys.exit(str(e))
         seat_file = session_dir / f"{r:02d}-{seat_name}-{mode_label}-r{r}.md"
-        seat_file.write_text(response, encoding="utf-8")
+        _write_private_text(seat_file, response)
         verdict = extract_verdict(response)
         if verdict == "(assente)":
             print(f"[council] ATTENZIONE: nessuna riga VERDICT trovata nella risposta del round {r}.")
@@ -634,7 +744,7 @@ def write_verdict(session_dir: Path, seat_name: str, seat: dict, mode: str, verd
     lines.append(f"## Risposta finale (round {len(verdicts)})")
     lines.append("")
     lines.append(final_response)
-    (session_dir / "verdict.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _write_private_text(session_dir / "verdict.md", "\n".join(lines) + "\n")
 
 
 def write_relay_verdict(session_dir: Path, records: list[RelayRecord]) -> None:
@@ -645,7 +755,11 @@ def write_relay_verdict(session_dir: Path, records: list[RelayRecord]) -> None:
             f"model={record.model} verdict={record.verdict}"
         )
     lines.extend(["", f"## Risposta finale ({records[-1].role})", "", records[-1].response])
-    (session_dir / "verdict.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _write_private_text(session_dir / "verdict.md", "\n".join(lines) + "\n")
+
+
+def _is_retryable_seat_error(error: SeatRunError) -> bool:
+    return error.kind in RETRYABLE_SEAT_ERROR_KINDS
 
 
 def _run_relay_stage(
@@ -691,7 +805,6 @@ def _run_relay_stage(
         seat = seats[chosen_name]
         pool = _seat_quota_pool(seat)
         prompt = build_relay_prompt(stage.role, brief, records)
-        egress_gate(prompt)
 
         print(
             f"[council] relay {idx:02d} — ruolo: {stage.role} — "
@@ -701,7 +814,7 @@ def _run_relay_stage(
             response, _usage = run_seat(seat, prompt, session_dir)
         except SeatRunError as e:
             attempted.add(chosen_name)
-            if e.kind != "no_output_timeout":
+            if not _is_retryable_seat_error(e):
                 sys.exit(str(e))
             blocked_until = quarantine.register(pool)
             last_failed_pool = pool
@@ -712,11 +825,17 @@ def _run_relay_stage(
             )
             continue
 
+        response, generated_output_redacted = redact_generated_output(response)
+        if generated_output_redacted:
+            print(
+                "[council] output del seat con possibile segreto: il frammento è stato redatto, "
+                "la staffetta continua."
+            )
         verdict = extract_verdict(response)
         if verdict == "(assente)":
             print(f"[council] ATTENZIONE: nessuna riga VERDICT trovata nello stadio {idx}.")
         seat_file = session_dir / f"{idx:02d}-{chosen_name}-relay-{slugify(stage.role)}.md"
-        seat_file.write_text(response, encoding="utf-8")
+        _write_private_text(seat_file, response)
         print(f"[council] relay {idx:02d} verdetto: {verdict}")
         return RelayRecord(stage.role, chosen_name, seat["model"], verdict, response)
 
@@ -725,30 +844,40 @@ def _run_mode(args: argparse.Namespace, mode: str, label: str, brief: str, role_
     seat_name, seat = resolve_seat(args)
     egress_gate(brief)
 
+    keep_session = bool(getattr(args, "keep_session", False))
     session_dir = new_session_dir(label)
-    (session_dir / "00-brief.md").write_text(brief, encoding="utf-8")
+    try:
+        _write_private_text(session_dir / "00-brief.md", brief)
 
-    role_initial = (ENGINE_ROOT / "prompts" / role_initial_name).read_text(encoding="utf-8")
-    role_continue = (
-        (ENGINE_ROOT / "prompts" / role_continue_name).read_text(encoding="utf-8")
-        if role_continue_name else None
-    )
+        role_initial = (ENGINE_ROOT / "prompts" / role_initial_name).read_text(encoding="utf-8")
+        role_continue = (
+            (ENGINE_ROOT / "prompts" / role_continue_name).read_text(encoding="utf-8")
+            if role_continue_name else None
+        )
 
-    print(f"[council] sessione: {session_dir}")
-    print(f"[council] seat: {seat_name} ({seat['model']}) — mode: {mode}")
+        if keep_session:
+            print(f"[council] sessione mantenuta: {session_dir}")
+        print(f"[council] seat: {seat_name} ({seat['model']}) — mode: {mode}")
 
-    responses, verdicts = run_rounds(seat_name, seat, session_dir, mode, brief, role_initial, role_continue, rounds)
+        responses, verdicts = run_rounds(seat_name, seat, session_dir, mode, brief, role_initial, role_continue, rounds)
 
-    write_verdict(session_dir, seat_name, seat, mode, verdicts, responses[-1])
+        write_verdict(session_dir, seat_name, seat, mode, verdicts, responses[-1])
 
-    print(f"[council] verdetto finale: {verdicts[-1]}")
-    print(f"[council] file: {session_dir / 'verdict.md'}")
-    print()
-    print(responses[-1])
+        print(f"[council] verdetto finale: {verdicts[-1]}")
+        if keep_session:
+            print(f"[council] file: {session_dir / 'verdict.md'}")
+        print()
+        print(responses[-1])
+    finally:
+        _finalize_session(session_dir, keep_session)
 
 
 def cmd_brainstorm(args: argparse.Namespace) -> None:
     rounds = args.rounds
+    if rounds < 1:
+        sys.exit("[council] --rounds deve essere almeno 1.")
+    if args.max_rounds < 1:
+        sys.exit("[council] --max-rounds deve essere almeno 1.")
     if rounds > args.max_rounds:
         print(f"[council] --rounds {rounds} supera --max-rounds {args.max_rounds}: eseguo solo {args.max_rounds} round.")
         rounds = args.max_rounds
@@ -771,47 +900,43 @@ def cmd_relay(args: argparse.Namespace) -> None:
     seats = load_seats()
     stages = _load_relay_sequence(args, config, seats)
     brief = build_brief(args.question, args.context, args.diff)
+    egress_gate(brief)
 
+    keep_session = bool(getattr(args, "keep_session", False))
     session_dir = new_session_dir(args.question)
-    (session_dir / "00-brief.md").write_text(brief, encoding="utf-8")
+    try:
+        _write_private_text(session_dir / "00-brief.md", brief)
 
-    model_costs = {} if args.no_stats_precheck else _opencode_model_costs()
-    quarantine = RelayQuarantine()
-    records: list[RelayRecord] = []
+        model_costs = {} if args.no_stats_precheck else _opencode_model_costs()
+        quarantine = RelayQuarantine()
+        records: list[RelayRecord] = []
 
-    print(f"[council] sessione: {session_dir}")
-    print(f"[council] mode: relay — stadi: {len(stages)}")
+        if keep_session:
+            print(f"[council] sessione mantenuta: {session_dir}")
+        print(f"[council] mode: relay — stadi: {len(stages)}")
 
-    for idx, stage in enumerate(stages, 1):
-        record = _run_relay_stage(
-            idx, stage, seats, session_dir, brief, records, model_costs, quarantine,
-            args.allow_training_risk,
-        )
-        records.append(record)
+        for idx, stage in enumerate(stages, 1):
+            record = _run_relay_stage(
+                idx, stage, seats, session_dir, brief, records, model_costs, quarantine,
+                args.allow_training_risk,
+            )
+            records.append(record)
 
-    write_relay_verdict(session_dir, records)
-    print(f"[council] verdetto finale: {records[-1].verdict}")
-    print(f"[council] file: {session_dir / 'verdict.md'}")
-    print()
-    print(records[-1].response)
+        write_relay_verdict(session_dir, records)
+        print(f"[council] verdetto finale: {records[-1].verdict}")
+        if keep_session:
+            print(f"[council] file: {session_dir / 'verdict.md'}")
+        print()
+        print(records[-1].response)
+    finally:
+        _finalize_session(session_dir, keep_session)
 
 
 def cmd_clean(args: argparse.Namespace) -> None:
     if not SESSIONS_DIR.is_dir():
         print("[council] nessuna sessione da pulire.")
         return
-    cutoff = datetime.now(timezone.utc) - timedelta(days=args.ttl_days)
-    removed = 0
-    for session_dir in sorted(SESSIONS_DIR.iterdir()):
-        if not session_dir.is_dir():
-            continue
-        if not args.all:
-            mtime = datetime.fromtimestamp(session_dir.stat().st_mtime, tz=timezone.utc)
-            if mtime >= cutoff:
-                continue
-        shutil.rmtree(session_dir)
-        removed += 1
-        print(f"[council] rimossa: {session_dir.name}")
+    removed = _cleanup_sessions(args.ttl_days, remove_all=args.all, announce=True)
     print(f"[council] pulizia completata: {removed} sessione/i rimossa/e.")
 
 
@@ -821,6 +946,10 @@ def _add_common_args(parser: argparse.ArgumentParser, *, include_seat: bool = Tr
     parser.add_argument(
         "--allow-training-risk", action="store_true",
         help="consenti l'uso di un seat senza garanzia zero-retention (solo test tecnici)",
+    )
+    parser.add_argument(
+        "--keep-session", action="store_true",
+        help="conserva gli artefatti locali per debug, altrimenti vengono rimossi al termine",
     )
 
 
