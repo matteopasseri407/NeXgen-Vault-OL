@@ -14,6 +14,8 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from conftest import load_agent_sync_module, run_agent_sync_python
 
 
@@ -48,6 +50,7 @@ def test_agent_sync_python_accepts_legacy_powershell_mode_flag(sandbox):
     assert "unknown mode" not in proc.stderr
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink launcher behavior is covered on Linux and macOS.")
 def test_posix_utils_links_council_launcher(sandbox, monkeypatch):
     mod = load_agent_sync_module(sandbox)
     monkeypatch.setattr(mod, "IS_WINDOWS", False)
@@ -62,6 +65,7 @@ def test_posix_utils_links_council_launcher(sandbox, monkeypatch):
     assert launcher.resolve() == (sandbox.scripts_dir / "council.sh").resolve()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable bits are not the Windows permission model.")
 def test_posix_utils_does_not_change_the_engine_source_mode(sandbox, monkeypatch):
     mod = load_agent_sync_module(sandbox)
     monkeypatch.setattr(mod, "IS_WINDOWS", False)

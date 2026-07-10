@@ -476,6 +476,7 @@ def test_generated_secret_is_redacted_without_blocking_the_next_stage(monkeypatc
     assert "[REDACTED POSSIBLE SECRET]" in clean
 
 
+@pytest.mark.skipif(os.name == "nt", reason="The POSIX launcher is exercised on Linux and macOS.")
 def test_posix_launcher_reaches_the_same_engine_help(tmp_path):
     launcher_dir = tmp_path / "bin"
     launcher_dir.mkdir()
