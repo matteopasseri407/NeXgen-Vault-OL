@@ -6,6 +6,8 @@ chiamando direttamente quella funzione, esattamente cio' che --index invoca.
 from __future__ import annotations
 
 import shutil
+import subprocess
+from types import SimpleNamespace
 
 from conftest import load_skills_sync_module
 
@@ -61,3 +63,36 @@ def test_index_is_idempotent_when_content_unchanged(sandbox):
     second = (sb.hub / "INDEX.md").read_bytes()
 
     assert first == second
+
+
+def test_github_clone_disables_interactive_credentials_and_has_timeout(sandbox, monkeypatch):
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.shutil, "which", lambda command: "/usr/bin/git")
+    observed = {}
+
+    def fake_run(command, **kwargs):
+        observed["command"] = command
+        observed["kwargs"] = kwargs
+        return SimpleNamespace(returncode=1, stderr="authentication required")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+    assert not mod.install_github("remote-skill", {"repo": "example/remote-skill"}, apply=True)
+    assert observed["command"][:5] == ["git", "-c", "credential.interactive=never", "clone", "--depth"]
+    assert observed["kwargs"]["stdin"] is subprocess.DEVNULL
+    assert observed["kwargs"]["timeout"] == mod.GIT_CLONE_TIMEOUT_SECONDS
+    assert observed["kwargs"]["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    assert observed["kwargs"]["env"]["GCM_INTERACTIVE"] == "Never"
+
+
+def test_github_clone_timeout_is_reported_without_crashing(sandbox, monkeypatch, capsys):
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.shutil, "which", lambda command: "/usr/bin/git")
+
+    def fake_run(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+    assert not mod.install_github("remote-skill", {"repo": "example/remote-skill"}, apply=True)
+    assert f"timed out after {mod.GIT_CLONE_TIMEOUT_SECONDS}s" in capsys.readouterr().out

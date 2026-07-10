@@ -14,9 +14,9 @@ Byte model (per the manifest):
                      folder vendored in the vault. Git has already carried
                      the bytes everywhere.
   - origin github -> third-party, not vendored: the bytes get reinstalled
-                     from upstream with `skills add <repo>` (npx). If
-                     missing, --apply tries to install it; if node/npx is
-                     missing, it flags it.
+                     from upstream with a shallow Git clone. If missing,
+                     --apply tries to install it and fails promptly when Git
+                     cannot clone without interaction.
 
 Runtime:
   - Codex: per-skill symlink (or copy on Windows) in ~/.codex/skills/<name>.
@@ -57,6 +57,7 @@ RUNTIME = {
     "codex": HOME / ".codex" / "skills",
 }
 IS_WINDOWS = platform.system() == "Windows"
+GIT_CLONE_TIMEOUT_SECONDS = 60
 
 PASS = WARN = ACT = FAILN = 0
 
@@ -170,8 +171,23 @@ def install_github(name: str, spec: dict, apply: bool) -> bool:
         url = f"https://github.com/{repo}.git"
         print(f"    … git clone --depth 1 {url}")
         repo_dir = Path(tmp) / "repo"
-        r = subprocess.run(["git", "clone", "--depth", "1", url, str(repo_dir)],
-                           capture_output=True, text=True)
+        clone_env = {
+            **os.environ,
+            "GIT_TERMINAL_PROMPT": "0",
+            "GCM_INTERACTIVE": "Never",
+        }
+        try:
+            r = subprocess.run(
+                ["git", "-c", "credential.interactive=never", "clone", "--depth", "1", url, str(repo_dir)],
+                capture_output=True,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                timeout=GIT_CLONE_TIMEOUT_SECONDS,
+                env=clone_env,
+            )
+        except subprocess.TimeoutExpired:
+            fail(f"hub/{name}: clone timed out after {GIT_CLONE_TIMEOUT_SECONDS}s")
+            return False
         if r.returncode != 0:
             fail(f"hub/{name}: clone failed. {r.stderr.strip()[:200]}")
             return False
