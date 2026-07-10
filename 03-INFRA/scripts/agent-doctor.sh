@@ -114,7 +114,10 @@ c=$(code http://127.0.0.1:5678/healthz); [ "$c" = 200 ] && ok "n8n-mcp (5678): $
 c=$(code http://127.0.0.1:33002/); { [ "$c" = 200 ] || [ "$c" = 302 ]; } && ok "firecrawl (33002): $c" || fail "firecrawl (33002): $c"
 c=$(code http://127.0.0.1:33003/health); [ "$c" = 200 ] && ok "vault-ocr (33003): $c" || fail "vault-ocr (33003): $c"
 if [ -n "${VAULT_LIBRARY_URL:-}" ]; then
-  c=$(code -H "Authorization: Bearer ${VAULT_LIBRARY_TOKEN:-}" "$VAULT_LIBRARY_URL")
+  # Streamable HTTP MCP rejects a generic GET without the protocol Accept
+  # header. OPTIONS gives a bounded, authenticated route probe without
+  # opening a response stream; a healthy endpoint answers 405 here.
+  c=$(code -X OPTIONS -H "Authorization: Bearer ${VAULT_LIBRARY_TOKEN:-}" -H "Accept: application/json, text/event-stream" "$VAULT_LIBRARY_URL")
   { [ "$c" = 200 ] || [ "$c" = 405 ]; } && ok "vault-library: $c (up)" || fail "vault-library: $c"
 else
   warn "VAULT_LIBRARY_URL not in env"

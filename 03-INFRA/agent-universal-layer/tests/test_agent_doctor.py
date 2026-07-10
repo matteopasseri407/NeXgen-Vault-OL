@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 
 import pytest
 
@@ -57,3 +58,15 @@ def test_doctor_smoke_detects_injected_broken_symlink(sandbox):
     )
     assert "FAIL:" in drifted.stdout
     assert "fake-skill-a" in drifted.stdout or "ROTTE" in drifted.stdout, drifted.stdout
+
+
+def test_vault_library_probe_uses_mcp_protocol_headers():
+    repo = Path(__file__).resolve().parents[3]
+    bash = (repo / "03-INFRA/scripts/agent-doctor.sh").read_text(encoding="utf-8")
+    powershell = (repo / "03-INFRA/scripts/agent-doctor.ps1").read_text(encoding="utf-8")
+
+    assert "code -X OPTIONS" in bash
+    assert "Accept: application/json, text/event-stream" in bash
+    assert "httpcode $env:VAULT_LIBRARY_URL" in powershell
+    assert "Accept = \"application/json, text/event-stream\"" in powershell
+    assert '"Options"' in powershell

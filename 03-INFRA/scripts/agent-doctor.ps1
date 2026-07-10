@@ -25,8 +25,8 @@ function warn($m) { $script:WARN++;  if (-not $Summary) { Write-Host "  [WARN] $
 function bad($m)  { $script:FAILN++; $script:FAILS += $m; if (-not $Summary) { Write-Host "  [FAIL] $m" -ForegroundColor Red } }
 function sec($m)  { if (-not $Summary) { Write-Host "`n$m" -ForegroundColor White } }
 function gitc([string[]]$GitArgs) { (& git -C $Vault @GitArgs 2>$null) }
-function httpcode($url, $headers) {
-  try { (Invoke-WebRequest -Uri $url -Method Get -TimeoutSec 6 -Headers $headers -UseBasicParsing -ErrorAction Stop).StatusCode }
+function httpcode($url, $headers, [string]$method = "Get") {
+  try { (Invoke-WebRequest -Uri $url -Method $method -TimeoutSec 6 -Headers $headers -UseBasicParsing -ErrorAction Stop).StatusCode }
   catch { if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 } }
 }
 function hashOf($p) { if (Test-Path -LiteralPath $p) { (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash } else { "" } }
@@ -99,7 +99,9 @@ $c = httpcode "http://127.0.0.1:5678/healthz" $null; if ($c -eq 200) { ok "n8n-m
 $c = httpcode "http://127.0.0.1:33002/" $null; if ($c -eq 200 -or $c -eq 302) { ok "firecrawl (33002): $c" } else { bad "firecrawl (33002): $c" }
 $c = httpcode "http://127.0.0.1:33003/health" $null; if ($c -eq 200) { ok "vault-ocr (33003): $c" } else { bad "vault-ocr (33003): $c" }
 if ($env:VAULT_LIBRARY_URL) {
-  $c = httpcode $env:VAULT_LIBRARY_URL @{ Authorization = "Bearer $($env:VAULT_LIBRARY_TOKEN)" }
+  # Streamable HTTP MCP rejects a generic GET without its protocol Accept
+  # header. OPTIONS is a bounded, authenticated route probe.
+  $c = httpcode $env:VAULT_LIBRARY_URL @{ Authorization = "Bearer $($env:VAULT_LIBRARY_TOKEN)"; Accept = "application/json, text/event-stream" } "Options"
   if ($c -eq 200 -or $c -eq 405) { ok "vault-library: $c (up)" } else { bad "vault-library: $c" }
 } else { warn "VAULT_LIBRARY_URL not in env" }
 if (Get-Command npx -ErrorAction SilentlyContinue) { ok "playwright: npx available" } else { warn "npx not in PATH (playwright MCP)" }
