@@ -258,6 +258,57 @@ def write_index(apply: bool) -> None:
     act(f"INDEX.md: catalog regenerated ({len(rows)} skills)")
 
 
+def load_skills_manifest() -> dict | None:
+    """Load the user-owned manifest without letting malformed YAML crash sync."""
+    try:
+        data = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
+    except OSError as exc:
+        fail(f"cannot read skills manifest: {exc}")
+        return None
+    except yaml.YAMLError as exc:
+        fail(f"invalid skills manifest YAML: {exc}")
+        return None
+
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        fail("invalid skills manifest: root must be a mapping")
+        return None
+
+    skills = data.get("skills", {})
+    if skills is None:
+        return {}
+    if not isinstance(skills, dict):
+        fail("invalid skills manifest: 'skills' must be a mapping")
+        return None
+
+    for name, spec in skills.items():
+        if not isinstance(name, str) or not name.strip():
+            fail("invalid skills manifest: every skill name must be a non-empty string")
+            return None
+        if not isinstance(spec, dict):
+            fail(f"invalid skills manifest: skill '{name}' must be a mapping")
+            return None
+        origin = spec.get("origin")
+        if origin not in {"vault", "github"}:
+            fail(f"invalid skills manifest: skill '{name}' has unsupported origin {origin!r}")
+            return None
+        targets = spec.get("targets", [])
+        if not isinstance(targets, list) or not all(isinstance(target, str) for target in targets):
+            fail(f"invalid skills manifest: skill '{name}' targets must be a list of strings")
+            return None
+        if origin == "github":
+            repo = spec.get("repo")
+            if not isinstance(repo, str) or not repo.strip():
+                fail(f"invalid skills manifest: GitHub skill '{name}' needs a repository")
+                return None
+        if "path" in spec and not isinstance(spec["path"], str):
+            fail(f"invalid skills manifest: skill '{name}' path must be a string")
+            return None
+
+    return skills
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Syncs the agent-layer's skills from the manifest.")
     ap.add_argument("--apply", action="store_true", help="run the actions (default: read-only diff only)")
@@ -276,8 +327,9 @@ def main() -> int:
     # is a valid state, not an error: fall through with an empty set instead
     # of exiting, so the rest of the sync (hub scan, INDEX.md) still runs.
     if MANIFEST.exists():
-        data = yaml.safe_load(MANIFEST.read_text(encoding="utf-8")) or {}
-        skills = data.get("skills") or {}
+        skills = load_skills_manifest()
+        if skills is None:
+            return 1
     else:
         print(f"manifest not found: {MANIFEST} (fresh install or no skills configured yet -- skipping)", file=sys.stderr)
         skills = {}

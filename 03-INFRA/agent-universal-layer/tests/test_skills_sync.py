@@ -9,6 +9,8 @@ import shutil
 import subprocess
 from types import SimpleNamespace
 
+import pytest
+
 from conftest import load_skills_sync_module
 
 
@@ -55,7 +57,6 @@ def test_index_is_idempotent_when_content_unchanged(sandbox):
 
     mod.write_index(apply=True)
     first = (sb.hub / "INDEX.md").read_bytes()
-    mtime1 = (sb.hub / "INDEX.md").stat().st_mtime_ns
 
     mod2 = load_skills_sync_module(sb)
     mod2.HUB.mkdir(parents=True, exist_ok=True)
@@ -96,3 +97,22 @@ def test_github_clone_timeout_is_reported_without_crashing(sandbox, monkeypatch,
 
     assert not mod.install_github("remote-skill", {"repo": "example/remote-skill"}, apply=True)
     assert f"timed out after {mod.GIT_CLONE_TIMEOUT_SECONDS}s" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("manifest", "message"),
+    [
+        ("not-a-mapping\n", "root must be a mapping"),
+        ("skills: []\n", "'skills' must be a mapping"),
+        ("skills:\n  broken: nope\n", "skill 'broken' must be a mapping"),
+    ],
+)
+def test_invalid_manifest_returns_a_readable_error_without_traceback(sandbox, monkeypatch, capsys, manifest, message):
+    (sandbox.skills_dir / "skills.manifest.yaml").write_text(manifest, encoding="utf-8")
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py"])
+
+    assert mod.main() == 1
+    output = capsys.readouterr().out
+    assert message in output
+    assert "AttributeError" not in output

@@ -32,7 +32,7 @@ One single place decides whether something is broken, one single place tells the
 | `agent-doctor` | brain | full alignment diagnosis; the only judge |
 | `agent_sync.py`'s `_send_healthcheck` | megaphone | notifies only on FAIL, with debounce and human-readable format; the only alert |
 | `render.py` | executor | generates MCP configs from the manifest (additive); computes drift |
-| `skills-sync.py` | executor | propagates skills from the manifest to every machine, with noninteractive Git clones and a bounded timeout for third-party sources |
+| `skills-sync.py` | executor | validates the skill manifest, then propagates skills from it to every machine, with noninteractive Git clones and a bounded timeout for third-party sources |
 | `skill-check` | executor | advisory security check of a skill (SkillSpector) |
 | `sync-vault-from-remote` | executor | pulls the vault from the remote before apply |
 | `n8n-vault-backup` | executor | nightly backup of n8n workflows (cron on the remote backend) |
