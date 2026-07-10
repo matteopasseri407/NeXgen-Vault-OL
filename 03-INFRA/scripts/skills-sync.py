@@ -13,10 +13,10 @@ Byte model (per the manifest):
   - origin vault  -> the hub points (symlink, or a copy on Windows) to the
                      folder vendored in the vault. Git has already carried
                      the bytes everywhere.
-  - origin github -> third-party, not vendored: the bytes get reinstalled
-                     from upstream with a shallow Git clone. If missing,
-                     --apply tries to install it and fails promptly when Git
-                     cannot clone without interaction.
+  - origin github -> third-party, not vendored: the manifest pins a full Git
+                     commit SHA. The synchronizer fetches exactly that object,
+                     verifies it, then copies the skill. If missing, --apply
+                     fails promptly when Git cannot fetch without interaction.
 
 Runtime:
   - Codex: per-skill symlink (or copy on Windows) in ~/.codex/skills/<name>.
@@ -28,7 +28,7 @@ Runtime:
 NOT authoritative for deletion: it never removes a skill absent from the manifest.
 """
 from __future__ import annotations
-import argparse, os, platform, shutil, subprocess, sys, tempfile
+import argparse, os, platform, re, shutil, subprocess, sys, tempfile
 from pathlib import Path
 try:
     import yaml
@@ -58,6 +58,7 @@ RUNTIME = {
 }
 IS_WINDOWS = platform.system() == "Windows"
 GIT_CLONE_TIMEOUT_SECONDS = 60
+GIT_COMMIT_SHA = re.compile(r"[0-9a-fA-F]{40}\Z")
 
 PASS = WARN = ACT = FAILN = 0
 
@@ -133,14 +134,61 @@ def ensure_absent_link(dst: Path, apply: bool, label: str) -> None:
         ok(f"{label}: excluded (lazy, on-demand from the hub)")
 
 
+def github_source_matches(dst: Path, repo: str, sub: str, commit: str) -> bool:
+    """Return whether an installed third-party skill has trusted provenance.
+
+    A SKILL.md alone is not enough: older installs used the upstream default
+    branch and could silently contain different bytes on two machines. The
+    sidecar is written only after the exact pinned commit has been fetched
+    and verified.
+    """
+    source = dst / ".source"
+    if not (dst / "SKILL.md").is_file() or not source.is_file():
+        return False
+    try:
+        metadata = dict(
+            line.split(": ", 1)
+            for line in source.read_text(encoding="utf-8").splitlines()
+            if ": " in line
+        )
+    except OSError:
+        return False
+    return (
+        metadata.get("upstream") == repo
+        and metadata.get("path") == sub
+        and metadata.get("commit", "").lower() == commit.lower()
+    )
+
+
+def run_git(command: list[str], env: dict[str, str]) -> subprocess.CompletedProcess | None:
+    """Run one bounded, non-interactive Git command for a third-party skill."""
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=GIT_CLONE_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    return result
+
+
 def install_github(name: str, spec: dict, apply: bool) -> bool:
     """Third-party skill missing from the hub: reinstalls it from upstream
-    with a controlled `git clone` (no npx: it collides with Claude's
+    at the manifest's immutable commit (no npx: it collides with Claude's
     whole-folder symlink). `path` in the manifest = subfolder containing
     SKILL.md (default: repo root). Returns True if present at the end."""
     repo = spec.get("repo", "")
     sub = spec.get("path", ".")
+    commit = spec.get("commit", "")
     dst = HUB / name
+    if not isinstance(commit, str) or not GIT_COMMIT_SHA.fullmatch(commit):
+        fail(f"hub/{name}: GitHub skill needs a full 40-character commit SHA")
+        return False
+    expected_commit = commit.lower()
     # defensive: in the hub, a github skill must be a real folder (a copy).
     # if a symlink is found here (self-loop, broken, or leftover), that's
     # never a valid state and would send the `.exists()` check below into
@@ -152,12 +200,15 @@ def install_github(name: str, spec: dict, apply: bool) -> bool:
             return False
         warn(f"hub/{name}: anomalous symlink in the hub, removing it and reinstalling from {repo}")
         dst.unlink()
-    if (dst / "SKILL.md").exists():
-        ok(f"hub/{name}: present (third-party {repo})")
+    if github_source_matches(dst, repo, sub, expected_commit):
+        ok(f"hub/{name}: present (third-party {repo} at {expected_commit})")
         return True
     if not apply:
         extra = f" [{sub}]" if sub != "." else ""
-        act(f"hub/{name}: MISSING, would install from {repo}{extra}  (git clone)")
+        act(
+            f"hub/{name}: missing or unverified for {expected_commit}, "
+            f"would install from {repo}{extra}"
+        )
         return False
     if shutil.which("git") is None:
         fail(f"hub/{name}: missing and git isn't available. Copy the skill by hand from https://github.com/{repo}")
@@ -169,27 +220,60 @@ def install_github(name: str, spec: dict, apply: bool) -> bool:
         shutil.rmtree(dst)
     with tempfile.TemporaryDirectory() as tmp:
         url = f"https://github.com/{repo}.git"
-        print(f"    … git clone --depth 1 {url}")
         repo_dir = Path(tmp) / "repo"
         clone_env = {
             **os.environ,
             "GIT_TERMINAL_PROMPT": "0",
             "GCM_INTERACTIVE": "Never",
         }
-        try:
-            r = subprocess.run(
-                ["git", "-c", "credential.interactive=never", "clone", "--depth", "1", url, str(repo_dir)],
-                capture_output=True,
-                text=True,
-                stdin=subprocess.DEVNULL,
-                timeout=GIT_CLONE_TIMEOUT_SECONDS,
-                env=clone_env,
-            )
-        except subprocess.TimeoutExpired:
-            fail(f"hub/{name}: clone timed out after {GIT_CLONE_TIMEOUT_SECONDS}s")
+        print(f"    … git fetch --depth 1 {url} {expected_commit}")
+        init = run_git(["git", "init", "--quiet", str(repo_dir)], clone_env)
+        if init is None:
+            fail(f"hub/{name}: Git setup timed out after {GIT_CLONE_TIMEOUT_SECONDS}s")
             return False
-        if r.returncode != 0:
-            fail(f"hub/{name}: clone failed. {r.stderr.strip()[:200]}")
+        if init.returncode != 0:
+            fail(f"hub/{name}: Git setup failed. {init.stderr.strip()[:200]}")
+            return False
+        remote = run_git(["git", "-C", str(repo_dir), "remote", "add", "origin", url], clone_env)
+        if remote is None:
+            fail(f"hub/{name}: Git remote setup timed out after {GIT_CLONE_TIMEOUT_SECONDS}s")
+            return False
+        if remote.returncode != 0:
+            fail(f"hub/{name}: Git remote setup failed. {remote.stderr.strip()[:200]}")
+            return False
+        fetched = run_git(
+            [
+                "git", "-C", str(repo_dir), "-c", "credential.interactive=never",
+                "fetch", "--quiet", "--depth", "1", "origin", expected_commit,
+            ],
+            clone_env,
+        )
+        if fetched is None:
+            fail(f"hub/{name}: fetch timed out after {GIT_CLONE_TIMEOUT_SECONDS}s")
+            return False
+        if fetched.returncode != 0:
+            fail(f"hub/{name}: fetch failed. {fetched.stderr.strip()[:200]}")
+            return False
+        resolved = run_git(["git", "-C", str(repo_dir), "rev-parse", "FETCH_HEAD"], clone_env)
+        if resolved is None:
+            fail(f"hub/{name}: commit verification timed out after {GIT_CLONE_TIMEOUT_SECONDS}s")
+            return False
+        if resolved.returncode != 0:
+            fail(f"hub/{name}: commit verification failed. {resolved.stderr.strip()[:200]}")
+            return False
+        actual_commit = resolved.stdout.strip().lower()
+        if actual_commit != expected_commit:
+            fail(f"hub/{name}: fetched commit {actual_commit or '<none>'} does not match {expected_commit}")
+            return False
+        checkout = run_git(
+            ["git", "-C", str(repo_dir), "checkout", "--detach", "--quiet", expected_commit],
+            clone_env,
+        )
+        if checkout is None:
+            fail(f"hub/{name}: checkout timed out after {GIT_CLONE_TIMEOUT_SECONDS}s")
+            return False
+        if checkout.returncode != 0:
+            fail(f"hub/{name}: checkout failed. {checkout.stderr.strip()[:200]}")
             return False
         src = repo_dir / sub
         # `sub` comes from the manifest. If it's absolute (e.g. "/etc") or
@@ -207,8 +291,9 @@ def install_github(name: str, spec: dict, apply: bool) -> bool:
         shutil.copytree(src, dst, ignore=shutil.ignore_patterns(".git", ".claude-plugin"))
         (dst / ".source").write_text(
             f"source: https://github.com/{repo}\nupstream: {repo}\npath: {sub}\n"
+            f"commit: {expected_commit}\n"
             f"model: vendored-as-is (unmodified)\n", encoding="utf-8")
-        act(f"hub/{name}: installed from {repo}")
+        act(f"hub/{name}: installed from {repo} at {expected_commit}")
         return True
 
 
@@ -301,6 +386,13 @@ def load_skills_manifest() -> dict | None:
             repo = spec.get("repo")
             if not isinstance(repo, str) or not repo.strip():
                 fail(f"invalid skills manifest: GitHub skill '{name}' needs a repository")
+                return None
+            commit = spec.get("commit")
+            if not isinstance(commit, str) or not GIT_COMMIT_SHA.fullmatch(commit):
+                fail(
+                    f"invalid skills manifest: GitHub skill '{name}' needs a full "
+                    "40-character commit SHA"
+                )
                 return None
         if "path" in spec and not isinstance(spec["path"], str):
             fail(f"invalid skills manifest: skill '{name}' path must be a string")

@@ -5,8 +5,10 @@ chiamando direttamente quella funzione, esattamente cio' che --index invoca.
 """
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -66,20 +68,29 @@ def test_index_is_idempotent_when_content_unchanged(sandbox):
     assert first == second
 
 
-def test_github_clone_disables_interactive_credentials_and_has_timeout(sandbox, monkeypatch):
+PINNED_COMMIT = hashlib.sha1(b"skills-sync test revision").hexdigest()
+
+
+def test_github_fetch_disables_interactive_credentials_and_has_timeout(sandbox, monkeypatch):
     mod = load_skills_sync_module(sandbox)
     monkeypatch.setattr(mod.shutil, "which", lambda command: "/usr/bin/git")
     observed = {}
 
     def fake_run(command, **kwargs):
-        observed["command"] = command
+        observed.setdefault("commands", []).append(command)
         observed["kwargs"] = kwargs
-        return SimpleNamespace(returncode=1, stderr="authentication required")
+        if "fetch" in command:
+            return SimpleNamespace(returncode=1, stdout="", stderr="authentication required")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
-    assert not mod.install_github("remote-skill", {"repo": "example/remote-skill"}, apply=True)
-    assert observed["command"][:5] == ["git", "-c", "credential.interactive=never", "clone", "--depth"]
+    assert not mod.install_github(
+        "remote-skill", {"repo": "example/remote-skill", "commit": PINNED_COMMIT}, apply=True
+    )
+    fetch = next(command for command in observed["commands"] if "fetch" in command)
+    assert fetch[-2:] == ["origin", PINNED_COMMIT]
+    assert "credential.interactive=never" in fetch
     assert observed["kwargs"]["stdin"] is subprocess.DEVNULL
     assert observed["kwargs"]["timeout"] == mod.GIT_CLONE_TIMEOUT_SECONDS
     assert observed["kwargs"]["env"]["GIT_TERMINAL_PROMPT"] == "0"
@@ -95,8 +106,61 @@ def test_github_clone_timeout_is_reported_without_crashing(sandbox, monkeypatch,
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
-    assert not mod.install_github("remote-skill", {"repo": "example/remote-skill"}, apply=True)
+    assert not mod.install_github(
+        "remote-skill", {"repo": "example/remote-skill", "commit": PINNED_COMMIT}, apply=True
+    )
     assert f"timed out after {mod.GIT_CLONE_TIMEOUT_SECONDS}s" in capsys.readouterr().out
+
+
+def test_github_skill_fetches_and_records_the_pinned_commit(sandbox, monkeypatch):
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.shutil, "which", lambda command: "/usr/bin/git")
+    observed = []
+
+    def fake_run(command, **kwargs):
+        observed.append(command)
+        if command[1] == "init":
+            Path(command[-1]).mkdir(parents=True)
+        if "rev-parse" in command:
+            return SimpleNamespace(returncode=0, stdout=f"{PINNED_COMMIT}\n", stderr="")
+        if "checkout" in command:
+            repo_dir = Path(command[command.index("-C") + 1])
+            (repo_dir / "SKILL.md").write_text("# pinned skill\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    spec = {"repo": "example/remote-skill", "commit": PINNED_COMMIT}
+
+    assert mod.install_github("remote-skill", spec, apply=True)
+    installed = sandbox.hub / "remote-skill"
+    source = (installed / ".source").read_text(encoding="utf-8")
+    assert f"commit: {PINNED_COMMIT}" in source
+    fetch = next(command for command in observed if "fetch" in command)
+    assert fetch[-1] == PINNED_COMMIT
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("a verified pinned skill must not be fetched again")
+
+    monkeypatch.setattr(mod.subprocess, "run", fail_if_called)
+    assert mod.install_github("remote-skill", spec, apply=True)
+
+
+def test_github_skill_rejects_a_different_fetched_commit(sandbox, monkeypatch, capsys):
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.shutil, "which", lambda command: "/usr/bin/git")
+
+    def fake_run(command, **kwargs):
+        if "rev-parse" in command:
+            return SimpleNamespace(returncode=0, stdout="a" * 40 + "\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+    assert not mod.install_github(
+        "remote-skill", {"repo": "example/remote-skill", "commit": PINNED_COMMIT}, apply=True
+    )
+    assert "does not match" in capsys.readouterr().out
+    assert not (sandbox.hub / "remote-skill").exists()
 
 
 @pytest.mark.parametrize(
@@ -105,6 +169,14 @@ def test_github_clone_timeout_is_reported_without_crashing(sandbox, monkeypatch,
         ("not-a-mapping\n", "root must be a mapping"),
         ("skills: []\n", "'skills' must be a mapping"),
         ("skills:\n  broken: nope\n", "skill 'broken' must be a mapping"),
+        (
+            "skills:\n  remote:\n    origin: github\n    repo: example/remote\n    targets: []\n",
+            "needs a full 40-character commit SHA",
+        ),
+        (
+            "skills:\n  remote:\n    origin: github\n    repo: example/remote\n    commit: short\n    targets: []\n",
+            "needs a full 40-character commit SHA",
+        ),
     ],
 )
 def test_invalid_manifest_returns_a_readable_error_without_traceback(sandbox, monkeypatch, capsys, manifest, message):
