@@ -81,3 +81,17 @@ def test_doctor_resolves_the_authoritative_remote_from_agent_sync():
     assert "config authoritative_remote" in powershell
     assert 'KNOWLEDGE_VAULT_REMOTE:-origin' not in bash
     assert 'else { "origin" }' not in powershell
+
+
+def test_antigravity_quota_is_a_warning_not_a_false_mcp_failure(sandbox):
+    agy = sandbox.bin_stubs / "agy"
+    agy.write_text(
+        "#!/bin/sh\nprintf '%s\\n' 'Error: Individual quota reached. Please upgrade your subscription.'\nexit 1\n",
+        encoding="utf-8",
+    )
+    agy.chmod(0o755)
+
+    result = run_agent_doctor(sandbox, "--strict")
+
+    assert "Antigravity behavioral probe skipped: the selected model quota is unavailable" in result.stdout
+    assert "Antigravity behavioral probe does not confirm" not in result.stdout

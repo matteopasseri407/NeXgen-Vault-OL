@@ -279,6 +279,7 @@ PY
     ag_probe_best_count=4
     ag_probe_had_non_timeout=0
     ag_probe_timed_out=0
+    ag_probe_quota=0
     for _attempt in 1 2; do
       ag_probe_tmp="$(mktemp)"
       timeout -k 5s 45s agy --print "Elenca SOLO i nomi dei server MCP disponibili in questa sessione, una riga per server, NESSUN dettaglio sui singoli tool e NESSUNA invocazione." --model "Gemini 3.5 Flash (Medium)" --sandbox >"$ag_probe_tmp" 2>&1
@@ -287,6 +288,10 @@ PY
       rm -f "$ag_probe_tmp"
       if [ "$ag_probe_rc" = 124 ] || [ "$ag_probe_rc" = 137 ]; then
         ag_probe_timed_out=1
+        continue
+      fi
+      if printf '%s\n' "$ag_probe_out" | grep -Eqi 'individual[[:space:]]+quota|quota[[:space:]]+(reached|exhausted|exceeded)|rate[[:space:]]+limit|too many requests|(^|[^0-9])429([^0-9]|$)'; then
+        ag_probe_quota=1
         continue
       fi
       ag_probe_had_non_timeout=1
@@ -306,46 +311,50 @@ PY
       [ "$ag_probe_count" -eq 0 ] && break
     done
 
-    ag_n8n_ok=0
-    case ", $ag_probe_best_missing, " in
-      *", n8n-mcp, "*)
-        ag_probe_tmp="$(mktemp)"
-        timeout -k 5s 45s agy --print "Usa un tool MCP n8n-mcp di sola lettura per elencare i workflow o leggere lo schema, senza creare/modificare nulla. Rispondi SOLO OK se una chiamata n8n-mcp riesce, oppure FAIL se non puoi chiamare n8n-mcp." --model "Gemini 3.5 Flash (Medium)" --sandbox >"$ag_probe_tmp" 2>&1
-        ag_probe_rc=$?
-        ag_probe_out="$(cat "$ag_probe_tmp" 2>/dev/null)"
-        rm -f "$ag_probe_tmp"
-        if [ "$ag_probe_rc" = 0 ] && printf '%s\n' "$ag_probe_out" | grep -Fq "OK"; then
-          ag_n8n_ok=1
-        fi
-        ;;
-    esac
-
-    ag_vault_library_ok=0
-    case ", $ag_probe_best_missing, " in
-      *", vault-library, "*)
-        ag_probe_tmp="$(mktemp)"
-        timeout -k 5s 45s agy --print "Usa il tool MCP vault-library/get_start_here, poi rispondi SOLO con OK se la chiamata riesce, oppure FAIL se non puoi chiamarlo. Non includere contenuto della nota." --model "Gemini 3.5 Flash (Medium)" --sandbox >"$ag_probe_tmp" 2>&1
-        ag_probe_rc=$?
-        ag_probe_out="$(cat "$ag_probe_tmp" 2>/dev/null)"
-        rm -f "$ag_probe_tmp"
-        if [ "$ag_probe_rc" = 0 ] && printf '%s\n' "$ag_probe_out" | grep -Fq "OK"; then
-          ag_vault_library_ok=1
-        fi
-        ;;
-    esac
-
-    ag_probe_missing=""
-    for srv in firecrawl n8n-mcp vault-library vault-ocr; do
-      [ "$srv" = "n8n-mcp" ] && [ "$ag_n8n_ok" = 1 ] && continue
-      [ "$srv" = "vault-library" ] && [ "$ag_vault_library_ok" = 1 ] && continue
-      printf '%s\n' "$ag_probe_best_out" | grep -Fqi "$srv" || ag_probe_missing="${ag_probe_missing}${ag_probe_missing:+, }$srv"
-    done
-    if [ "$ag_probe_had_non_timeout" = 0 ] && [ "$ag_probe_timed_out" = 1 ]; then
+    if [ "$ag_probe_had_non_timeout" = 0 ] && [ "$ag_probe_quota" = 1 ]; then
+      warn "Antigravity behavioral probe skipped: the selected model quota is unavailable"
+    elif [ "$ag_probe_had_non_timeout" = 0 ] && [ "$ag_probe_timed_out" = 1 ]; then
       fail "Antigravity behavioral probe (agy --print) timed out"
-    elif [ -z "$ag_probe_missing" ]; then
-      ok "Antigravity behavioral probe confirms the core MCP servers are visible"
     else
-      fail "Antigravity behavioral probe does not confirm: $ag_probe_missing"
+      ag_n8n_ok=0
+      case ", $ag_probe_best_missing, " in
+        *", n8n-mcp, "*)
+          ag_probe_tmp="$(mktemp)"
+          timeout -k 5s 45s agy --print "Usa un tool MCP n8n-mcp di sola lettura per elencare i workflow o leggere lo schema, senza creare/modificare nulla. Rispondi SOLO OK se una chiamata n8n-mcp riesce, oppure FAIL se non puoi chiamare n8n-mcp." --model "Gemini 3.5 Flash (Medium)" --sandbox >"$ag_probe_tmp" 2>&1
+          ag_probe_rc=$?
+          ag_probe_out="$(cat "$ag_probe_tmp" 2>/dev/null)"
+          rm -f "$ag_probe_tmp"
+          if [ "$ag_probe_rc" = 0 ] && printf '%s\n' "$ag_probe_out" | grep -Fq "OK"; then
+            ag_n8n_ok=1
+          fi
+          ;;
+      esac
+
+      ag_vault_library_ok=0
+      case ", $ag_probe_best_missing, " in
+        *", vault-library, "*)
+          ag_probe_tmp="$(mktemp)"
+          timeout -k 5s 45s agy --print "Usa il tool MCP vault-library/get_start_here, poi rispondi SOLO con OK se la chiamata riesce, oppure FAIL se non puoi chiamarlo. Non includere contenuto della nota." --model "Gemini 3.5 Flash (Medium)" --sandbox >"$ag_probe_tmp" 2>&1
+          ag_probe_rc=$?
+          ag_probe_out="$(cat "$ag_probe_tmp" 2>/dev/null)"
+          rm -f "$ag_probe_tmp"
+          if [ "$ag_probe_rc" = 0 ] && printf '%s\n' "$ag_probe_out" | grep -Fq "OK"; then
+            ag_vault_library_ok=1
+          fi
+          ;;
+      esac
+
+      ag_probe_missing=""
+      for srv in firecrawl n8n-mcp vault-library vault-ocr; do
+        [ "$srv" = "n8n-mcp" ] && [ "$ag_n8n_ok" = 1 ] && continue
+        [ "$srv" = "vault-library" ] && [ "$ag_vault_library_ok" = 1 ] && continue
+        printf '%s\n' "$ag_probe_best_out" | grep -Fqi "$srv" || ag_probe_missing="${ag_probe_missing}${ag_probe_missing:+, }$srv"
+      done
+      if [ -z "$ag_probe_missing" ]; then
+        ok "Antigravity behavioral probe confirms the core MCP servers are visible"
+      else
+        fail "Antigravity behavioral probe does not confirm: $ag_probe_missing"
+      fi
     fi
   else
     warn "agy not in PATH, skipping Antigravity behavioral probe"

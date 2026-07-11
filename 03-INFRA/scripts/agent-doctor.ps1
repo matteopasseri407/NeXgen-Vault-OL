@@ -260,9 +260,14 @@ if ($Strict) {
     if (Wait-Job $agJob -Timeout 45) {
       $agProbeOut = (Receive-Job $agJob | Out-String)
       Remove-Job $agJob -Force
-      $agProbeMissing = @($expectedMcp | Where-Object { $agProbeOut -notmatch [regex]::Escape($_) })
-      if ($agProbeMissing.Count -eq 0) { ok "Antigravity behavioral probe confirms the core MCP servers are visible" }
-      else { bad "Antigravity behavioral probe does not confirm: $($agProbeMissing -join ', ')" }
+      if ($agProbeOut -match '(?i)individual\s+quota|quota\s+(reached|exhausted|exceeded)|rate\s+limit|too many requests|\b429\b') {
+        warn "Antigravity behavioral probe skipped: the selected model quota is unavailable"
+      }
+      else {
+        $agProbeMissing = @($expectedMcp | Where-Object { $agProbeOut -notmatch [regex]::Escape($_) })
+        if ($agProbeMissing.Count -eq 0) { ok "Antigravity behavioral probe confirms the core MCP servers are visible" }
+        else { bad "Antigravity behavioral probe does not confirm: $($agProbeMissing -join ', ')" }
+      }
     } else {
       Stop-Job $agJob; Remove-Job $agJob -Force
       bad "Antigravity behavioral probe (agy --print) timed out"
