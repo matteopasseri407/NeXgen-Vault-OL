@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
+
+import pytest
+
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="vault-push.sh is the POSIX infra publication helper; Windows uses its native agent-sync path.",
+)
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:

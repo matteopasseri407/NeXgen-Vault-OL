@@ -184,6 +184,7 @@ def sandbox(tmp_path, monkeypatch) -> Sandbox:
     _copy_engine_scripts(sb)
     _make_bin_stubs(sb)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sb.vault))
     return sb
 
