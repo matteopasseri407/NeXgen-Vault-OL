@@ -45,12 +45,12 @@ This is informational only. Nothing else changes because of it.
    agent-sync apply
    agent-doctor --strict --summary
    ```
-   `agent-sync apply` also runs any pending data migrations for that engine
-   version at this point (see below) — before anything else touches your
-   data files.
-   It first proves that the data branch is fresh against the authoritative
-   remote declared in `03-INFRA/agent-universal-layer/sync/remotes.yaml`; unsafe Git
-   states stop the apply. See `docs/sync-contract.md`.
+   `agent-sync apply` first proves that the data branch is fresh against the
+   authoritative remote declared in
+   `03-INFRA/agent-universal-layer/sync/remotes.yaml`. It then validates the
+   configuration contract before it runs any pending data migration or writes
+   a generated CLI file. Unsafe Git states and invalid configuration stop the
+   apply. See `docs/sync-contract.md`.
 5. If `agent-doctor` reports new `FAIL`s that weren't there before the
    upgrade, something in the new version doesn't fit your setup. Roll back
    by checking out your previous pin's commit and moving `ENGINE-PIN.txt`
@@ -75,7 +75,9 @@ data at an older schema version:
   nothing at all — no file is touched, no backup is created.
 
 There are no migrations registered yet as of `v0.2.0`: today's data shape
-is the baseline this mechanism starts counting from.
+is the baseline this mechanism starts counting from. A migration runs only
+after the preflight has accepted the data source, and before runtime files are
+generated.
 
 ## What never happens automatically
 

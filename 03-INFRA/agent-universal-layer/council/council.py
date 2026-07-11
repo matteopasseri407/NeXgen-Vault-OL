@@ -24,13 +24,19 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import yaml
-
 VERDICT_RE = re.compile(r"(?i)verdict\s*:\s*(APPROVE|REVISE|REJECT)\b")
-REQUIRED_SEAT_FIELDS = ("vendor", "cli", "model")
 SUPPORTED_CLIS = ("opencode", "agy", "codex")
 
+# Council may validate a data-root file directly. That read-only check must
+# not leave Python cache files next to the user's data on an error path.
+sys.dont_write_bytecode = True
+
 ENGINE_ROOT = Path(__file__).resolve().parent
+SCRIPTS_DIR = ENGINE_ROOT.parent.parent / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+from config_schema import ConfigValidationError, load_council_config  # noqa: E402
+
 LEAK_SCAN_DIR = ENGINE_ROOT.parent / "leak-scan"
 SESSIONS_DIR = Path.home() / ".local" / "state" / "council" / "sessions"
 DEFAULT_TTL_DAYS = 7
@@ -104,8 +110,14 @@ def load_config() -> dict:
             f"[council] nessun seats.yaml nel piano dati ({SEATS_PATH}): espansione inerte.\n"
             f"Copia {ENGINE_ROOT / 'seats.yaml.example'} in quel percorso e personalizzalo."
         )
-    data = yaml.safe_load(SEATS_PATH.read_text(encoding="utf-8")) or {}
-    return data
+    try:
+        return load_council_config(SEATS_PATH)
+    except ConfigValidationError as exc:
+        message = str(exc).replace(
+            "timeout_seconds must be a finite number greater than zero",
+            "timeout_seconds deve essere un numero finito maggiore di zero",
+        )
+        sys.exit(f"[council] configurazione seats.yaml non valida: {message}")
 
 
 def _parse_timeout_seconds(value: object) -> float:
@@ -143,25 +155,9 @@ def _resolve_timeout_seconds(seat: dict, invocation_timeout: float | None) -> fl
 
 def load_seats() -> dict:
     data = load_config()
-    seats = data.get("seats", {})
+    seats = data["seats"]
     if not seats:
         sys.exit(f"[council] {SEATS_PATH} è vuoto: espansione inerte, niente da fare.")
-    for name, seat in seats.items():
-        missing = [f for f in REQUIRED_SEAT_FIELDS if f not in seat]
-        if missing:
-            sys.exit(f"[council] seat '{name}' in {SEATS_PATH} incompleto: mancano {', '.join(missing)}.")
-        if seat["cli"] not in SUPPORTED_CLIS:
-            sys.exit(
-                f"[council] seat '{name}' in {SEATS_PATH}: cli '{seat['cli']}' non supportata "
-                f"(attese: {', '.join(SUPPORTED_CLIS)})."
-            )
-        if "timeout_seconds" in seat:
-            try:
-                _parse_timeout_seconds(seat["timeout_seconds"])
-            except ValueError as exc:
-                sys.exit(
-                    f"[council] seat '{name}' in {SEATS_PATH}: timeout_seconds {exc}."
-                )
     return seats
 
 

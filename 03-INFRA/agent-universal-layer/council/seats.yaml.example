@@ -51,6 +51,9 @@
 #     - role: reviewer
 #       seat: seat-d
 
+# Campo root obbligatorio, aggiornalo solo con una migrazione documentata.
+schema_version: 1
+
 seats:
   esempio-seat:
     vendor: nome-vendor

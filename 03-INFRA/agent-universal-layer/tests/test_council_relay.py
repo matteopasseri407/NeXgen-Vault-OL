@@ -31,7 +31,10 @@ def load_council(monkeypatch, tmp_path):
 
 
 def write_seats(council, text: str) -> None:
-    council.SEATS_PATH.write_text(text.strip() + "\n", encoding="utf-8")
+    content = text.strip()
+    if not content.startswith("schema_version:"):
+        content = "schema_version: 1\n" + content
+    council.SEATS_PATH.write_text(content + "\n", encoding="utf-8")
 
 
 def relay_args(**overrides):
@@ -63,6 +66,49 @@ def single_mode_args(**overrides):
     }
     values.update(overrides)
     return argparse.Namespace(**values)
+
+
+def test_council_rejects_unversioned_seats_before_any_vendor_call(monkeypatch, tmp_path):
+    council = load_council(monkeypatch, tmp_path)
+    council.SEATS_PATH.write_text(
+        """seats:
+  one:
+    vendor: vendor-a
+    cli: opencode
+    model: opencode/test-one
+    zero_retention: true
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="schema_version"):
+        council.load_seats()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        ("zero_retention", '"true"', "zero_retention"),
+        ("timeout_seconds", "false", "numero finito"),
+        ("cli", "unknown-cli", "must be one of"),
+    ],
+)
+def test_council_contract_rejects_invalid_seat_fields(monkeypatch, tmp_path, field, value, expected):
+    council = load_council(monkeypatch, tmp_path)
+    write_seats(
+        council,
+        f"""seats:
+  one:
+    vendor: vendor-a
+    cli: opencode
+    model: opencode/test-one
+    zero_retention: true
+    {field}: {value}
+""",
+    )
+
+    with pytest.raises(SystemExit, match=expected):
+        council.load_seats()
 
 
 def test_relay_prompt_quotes_previous_output_and_replays_original(monkeypatch, tmp_path):

@@ -20,13 +20,14 @@ completely inert. Nothing about the rest of the engine depends on it.
    ```
    (adjust the path if `AGENT_VAULT_DATA`/`KNOWLEDGE_VAULT_PATH` points
    somewhere else). This file is your data, never committed to the engine.
-2. Edit it: pick the seats you have, following the comments in the
-   template. Each seat needs `vendor`, `cli`, and `model`; `cli` must be one
-   of `opencode`, `agy`, `codex`. Those are the only CLIs `council.py`
-   knows how to invoke today. Set `zero_retention: true` only if you've
-   confirmed that with a primary source (the provider's own privacy page),
-   not a summary. You can also set an optional positive `timeout_seconds`
-   for a seat that is known to need more or less time.
+2. Keep `schema_version: 1` at the root, then pick the seats you have,
+   following the comments in the template. Each seat needs `vendor`, `cli`,
+   `model`, and an explicit `zero_retention: true|false`. `cli` must be one
+   of `opencode`, `agy`, `codex`. Those are the only CLIs `council.py` knows
+   how to invoke today. Set `zero_retention: true` only if you've confirmed
+   that with a primary source, not a summary. You can also set an optional
+   positive `timeout_seconds` for a seat that is known to need more or less
+   time.
 3. In a MULTI setup, run `agent-sync apply` once to install the `council`
    launcher on Linux and the `council.cmd` wrapper on Windows.
    Then run any command below.

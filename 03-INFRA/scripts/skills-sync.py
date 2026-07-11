@@ -560,9 +560,33 @@ def load_skills_manifest() -> dict | None:
     return skills
 
 
+def validate_manifest_sources(skills: dict) -> bool:
+    """Check local manifest references without creating runtime views.
+
+    A structural manifest can still point to a missing Vault skill. The
+    provisioning preflight needs to catch that before any generated config is
+    touched, while GitHub sources remain intentionally network-free here.
+    """
+    healthy = True
+    for name, spec in skills.items():
+        if spec.get("origin") != "vault":
+            continue
+        source = UL / "skills" / name / "SKILL.md"
+        if source.is_file():
+            continue
+        fail(f"library/{name}: missing canonical Vault source {source}")
+        healthy = False
+    return healthy
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Syncs the agent-layer's skills from the manifest.")
     ap.add_argument("--apply", action="store_true", help="run the actions (default: read-only diff only)")
+    ap.add_argument(
+        "--validate",
+        action="store_true",
+        help="validate the manifest and local Vault references without writing runtime views",
+    )
     ap.add_argument("--index", action="store_true", help="regenerate ONLY the INDEX.md catalog and exit")
     ap.add_argument(
         "--migrate-legacy",
@@ -572,12 +596,24 @@ def main() -> int:
     args = ap.parse_args()
     apply = args.apply
 
+    if args.validate and (args.apply or args.index or args.migrate_legacy):
+        ap.error("--validate cannot be combined with --apply, --index, or --migrate-legacy")
+
     if args.index:
         print(f"\033[1m=== skills-sync [INDEX] · {platform.system()} ===\033[0m")
         LIBRARY.mkdir(parents=True, exist_ok=True)
         ACTIVE.mkdir(parents=True, exist_ok=True)
         write_index(apply=True)
         return 1 if FAILN else 0
+
+    if args.validate:
+        if not MANIFEST.exists():
+            print(f"manifest not found: {MANIFEST} (fresh install or no skills configured yet -- valid)")
+            return 0
+        skills = load_skills_manifest()
+        if skills is None:
+            return 1
+        return 0 if validate_manifest_sources(skills) else 1
 
     # The manifest is vault DATA (a user's personal skill choices), not
     # something the engine ships with. A fresh install has none yet -- that

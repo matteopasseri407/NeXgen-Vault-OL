@@ -142,7 +142,7 @@ def _copy_engine_scripts(sandbox: Sandbox) -> None:
 
     shutil.copy2(REAL_UL / "mcp" / "render.py", sandbox.mcp_dir / "render.py")
     for name in (
-        "agent-sync.sh", "agent_sync.py", "agent-skill.py", "skills-sync.py", "agent-doctor.sh",
+        "agent-sync.sh", "agent_sync.py", "agent-skill.py", "skills-sync.py", "config_schema.py", "agent-doctor.sh",
         "council.sh", "council.ps1", "vault-push.sh",
     ):
         dst = sandbox.scripts_dir / name

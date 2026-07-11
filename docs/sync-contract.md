@@ -35,6 +35,7 @@ agent-sync config mirrors
 | `agent-sync apply` | Manual name for the same pull and apply transaction. Never pushes. |
 | `agent-sync pull` | Pull and healthcheck only. Never regenerates CLI files. |
 | `agent-sync publish` | Publishes existing commits to the authoritative remote, then configured mirrors. It never pulls or applies. |
+| `agent-sync preflight` | Validates the local configuration contract without pulling or generating runtime files. |
 | `agent-sync doctor` | Runs diagnostics and alerts only. |
 | `agent-sync bootstrap-alerts` | Provisions optional alert credentials, then runs diagnostics. |
 
@@ -58,6 +59,25 @@ agent-sync apply --allow-offline
 
 This override is rejected for `guard` and never bypasses dirty, ahead, or
 diverged states.
+
+## Configuration gate
+
+After a successful pull, and before data migrations or generated runtime
+files, `guard` and `apply` run the same preflight as `agent-sync preflight`.
+It checks the versioned MCP manifest, the optional Council seats file, the
+skills manifest and local Vault skill sources, the portion of Claude settings
+that the hook merger may change, and the host remote declaration already read
+by the provisioner.
+
+MCP and Council files use `schema_version: 1`. The MCP contract rejects an
+unknown CLI target, unsupported transport, invalid environment variable name,
+missing HTTP bearer reference, invalid timeout, or malformed Windows override.
+Council remains optional, so a missing `seats.yaml` keeps it inert. If the file
+exists, it must satisfy its schema before an apply can continue.
+
+This makes an invalid source a stop condition before the engine changes a CLI
+configuration. The preflight command itself writes only its normal lock and
+run log.
 
 ## Lock and result
 

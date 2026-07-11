@@ -27,14 +27,18 @@ except ModuleNotFoundError:
     except ModuleNotFoundError:
         tomllib = None
 TOMLDecodeError = tomllib.TOMLDecodeError if tomllib is not None else ValueError
-try:
-    import yaml
-except ModuleNotFoundError:
-    print("render.py needs PyYAML: pip install pyyaml", file=sys.stderr)
-    sys.exit(1)
+
+# Rendering must not add Python cache files beside user-owned data merely by
+# validating a manifest or printing a diff.
+sys.dont_write_bytecode = True
 
 HOME = Path.home()
 HERE = Path(__file__).parent
+SCRIPTS_DIR = HERE.parent.parent / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+from config_schema import ConfigValidationError, load_mcp_manifest  # noqa: E402
+
 # The manifest is DATA (the user's real server list, concrete values), never
 # something the engine repo should serve — read it from vault_data, not from
 # HERE (this script may be running from a cloned engine, where the sibling
@@ -144,7 +148,7 @@ def _required_ok(s):
     return _env_present(req)
 
 def load_manifest():
-    raw = yaml.safe_load(MANIFEST.read_text("utf-8"))["servers"]
+    raw = load_mcp_manifest(MANIFEST)
     out = {}
     for n, s in raw.items():
         s = os_view(s)
@@ -153,6 +157,14 @@ def load_manifest():
             continue
         out[n] = s
     return out
+
+
+def _load_manifest_or_stop():
+    try:
+        return load_manifest()
+    except ConfigValidationError as exc:
+        print(f">>> STOP: invalid MCP manifest ({exc}). Fix the data source before retrying.", file=sys.stderr)
+        return None
 
 def keep_extras(gen, live, label):
     """A server in the live file but NOT in the manifest is not drift to be
@@ -200,7 +212,9 @@ def diff_struct(path, cur, exp, out):
         out.append(f"    ~ {path[:-1]}: live={json.dumps(cur, ensure_ascii=False)}  expected={json.dumps(exp, ensure_ascii=False)}")
 
 def cmd_diff():
-    man = load_manifest()
+    man = _load_manifest_or_stop()
+    if man is None:
+        return 2
     ok = bad = extra = 0
     for cli, spec in CLI.items():
         current = load_current(cli)
@@ -223,6 +237,7 @@ def cmd_diff():
         for k in sorted(set(current) - seen):
             print(f"  [EXTRA]  '{k}' in the live file but not in the manifest (kept by --write: register it to propagate it)"); extra += 1
     print(f"\n---- summary: {ok} servers match, {bad} with differences, {extra} outside the manifest ----")
+    return 0
 
 # ---- per-style serializers ------------------------------------------------
 
@@ -421,7 +436,9 @@ def write_opencode():
         print(f">>> STOP: {path.name} is not valid JSON ({e}). Fix it or restore a .bak-* backup before rerunning."); return 2
     if not isinstance(live, dict):
         print(f">>> STOP: {path.name} JSON root is not an object; refusing to patch it."); return 2
-    man = load_manifest()
+    man = _load_manifest_or_stop()
+    if man is None:
+        return 2
     gen = {n: r_opencode(n, s) for n, s in man.items() if "opencode" in s["targets"]}
     gen = keep_extras(gen, live.get("mcp", {}), "opencode")
     new_mcp = reorder(gen, live.get("mcp", {}))
@@ -438,7 +455,9 @@ def write_antigravity():
     if not isinstance(live, dict):
         print(f">>> STOP: {path.name} JSON root is not an object; refusing to patch it."); return 2
     live_servers = live.get("mcpServers", {})
-    man = load_manifest()
+    man = _load_manifest_or_stop()
+    if man is None:
+        return 2
     gen = {}
     for n, s in man.items():
         if "antigravity" not in s["targets"]:
@@ -495,7 +514,9 @@ def write_codex(path=None):
     except TOMLDecodeError as e:
         print(f">>> STOP: {path.name} is not valid TOML ({e}). Fix it or restore a .bak-* backup before rerunning."); return 2
     live_srv = live.get("mcp_servers", {})
-    man = load_manifest()
+    man = _load_manifest_or_stop()
+    if man is None:
+        return 2
 
     targets = {}   # cname -> (direct_fields, env_or_None)
     for n, s in man.items():
@@ -587,7 +608,9 @@ def write_claude(path=None):
     if not isinstance(live, dict):
         print(f">>> STOP: {path.name} JSON root is not an object; refusing to patch it."); return 2
     live_mcp = live.get("mcpServers", {})
-    man = load_manifest()
+    man = _load_manifest_or_stop()
+    if man is None:
+        return 2
     gen = {}
     for n, s in man.items():
         if "claude" not in s["targets"]:
@@ -616,8 +639,7 @@ def main():
     args = ap.parse_args()
     if args.write:
         return cmd_write(args.write)
-    cmd_diff()
-    return 0
+    return cmd_diff()
 
 if __name__ == "__main__":
     sys.exit(main())

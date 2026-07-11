@@ -1,6 +1,8 @@
 # Manifest MCP SINTETICO per i test di render.py (B1). Nessun valore reale:
 # nomi, comandi, URL e token sono tutti inventati da zero apposta per i test
 # (regola B1: "dati SOLO inventati da zero, mai derivati da config/note reali").
+schema_version: 1
+
 servers:
 
   fake-stdio-tool:

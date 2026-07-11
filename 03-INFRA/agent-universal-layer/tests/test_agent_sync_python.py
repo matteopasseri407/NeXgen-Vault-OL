@@ -21,6 +21,7 @@ from conftest import load_agent_sync_module, run_agent_sync_python
 
 def _patch_apply_phases(monkeypatch, mod, called: list[str]) -> None:
     for name in (
+        "preflight",
         "data_migrations",
         "instructions",
         "antigravity_mcp",
@@ -344,23 +345,57 @@ def test_publish_aligns_mirror_even_when_authoritative_is_already_current(sandbo
     assert mirror_head == local_head
 
 
-@pytest.mark.parametrize(
-    ("relative_manifest", "expected_phase"),
-    [
-        ("mcp/manifest.yaml", "mcp_render"),
-        ("skills/skills.manifest.yaml", "skills_index"),
-    ],
-)
-def test_real_manifest_subprocess_failure_propagates_nonzero(
-    sandbox, relative_manifest, expected_phase
-):
+@pytest.mark.parametrize("relative_manifest", ["mcp/manifest.yaml", "skills/skills.manifest.yaml"])
+def test_invalid_manifest_blocks_in_preflight_before_apply(sandbox, relative_manifest):
     (sandbox.ul / relative_manifest).write_text("- invalid-root\n", encoding="utf-8")
 
     proc = run_agent_sync_python(sandbox, "apply")
 
     assert proc.returncode == 1, proc.stdout + proc.stderr
     log = (sandbox.home / ".local" / "state" / "agent-sync.log").read_text(encoding="utf-8")
-    assert f"phase {expected_phase}: ERROR" in log
+    assert "phase preflight: ERROR" in log
+    assert not (sandbox.vault / "99-INDEX" / "DATA-SCHEMA-VERSION.txt").exists()
+
+
+def test_preflight_command_validates_without_generating_runtime_files(sandbox):
+    proc = run_agent_sync_python(sandbox, "preflight")
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not (sandbox.vault / "99-INDEX" / "DATA-SCHEMA-VERSION.txt").exists()
+    assert not (sandbox.home / ".local" / "bin").exists()
+
+
+def test_preflight_blocks_invalid_claude_hook_shape_before_copying_hook(sandbox):
+    claude_dir = sandbox.home / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "settings.json").write_text('{"hooks": []}\n', encoding="utf-8")
+
+    proc = run_agent_sync_python(sandbox, "apply")
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert not (claude_dir / "claude-vault-checkpoint.mjs").exists()
+    assert not (sandbox.vault / "99-INDEX" / "DATA-SCHEMA-VERSION.txt").exists()
+
+
+def test_preflight_blocks_invalid_optional_council_data_before_apply(sandbox):
+    seats = sandbox.ul / "council" / "seats.yaml"
+    seats.parent.mkdir(parents=True, exist_ok=True)
+    seats.write_text(
+        """schema_version: 1
+seats:
+  unsafe:
+    vendor: example
+    cli: opencode
+    model: example/model
+    zero_retention: "true"
+""",
+        encoding="utf-8",
+    )
+
+    proc = run_agent_sync_python(sandbox, "apply")
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert not (sandbox.vault / "99-INDEX" / "DATA-SCHEMA-VERSION.txt").exists()
 
 
 def test_host_wide_lock_rejects_second_manual_run(sandbox, monkeypatch):

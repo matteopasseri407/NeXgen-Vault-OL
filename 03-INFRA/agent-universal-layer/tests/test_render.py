@@ -203,6 +203,97 @@ def test_write_codex_guard_blocks_on_missing_env_section(sandbox_with_live_confi
     assert path.read_text(encoding="utf-8") == before_raw, "codex: il file e' stato toccato nonostante il guard"
 
 
+@pytest.mark.parametrize(
+    ("manifest_text", "expected"),
+    [
+        ("servers: {}\n", "schema_version"),
+        ("schema_version: 1\nservers: []\n", "servers must be a mapping"),
+        (
+            """schema_version: 1
+servers:
+  bad-target:
+    transport: stdio
+    command: node
+    targets: [unknown]
+""",
+            "unsupported CLI",
+        ),
+        (
+            """schema_version: 1
+servers:
+  missing-auth:
+    transport: http
+    url: https://example.invalid/mcp
+    targets: [codex]
+""",
+            "auth must be a mapping",
+        ),
+        (
+            """schema_version: 1
+servers:
+  bad-env:
+    transport: stdio
+    command: node
+    env: {NOT-VALID: value}
+    targets: [codex]
+""",
+            "environment variable name",
+        ),
+        (
+            """schema_version: 1
+servers:
+  bad-timeout:
+    transport: stdio
+    command: node
+    timeouts: {tool: false}
+    targets: [codex]
+""",
+            "finite number",
+        ),
+        (
+            """schema_version: 1
+servers:
+  bad-windows:
+    transport: stdio
+    command: node
+    targets: [codex]
+    windows: {transport: http}
+""",
+            "unsupported field",
+        ),
+    ],
+)
+def test_manifest_contract_rejects_invalid_data(sandbox, manifest_text, expected):
+    (sandbox.mcp_dir / "manifest.yaml").write_text(manifest_text, encoding="utf-8")
+    mod = load_render_module(sandbox)
+
+    with pytest.raises(mod.ConfigValidationError, match=expected):
+        mod.load_manifest()
+
+
+def test_invalid_manifest_blocks_before_live_config_write(sandbox_with_live_configs, capsys):
+    sb = sandbox_with_live_configs
+    path = sb.live_config_path("codex")
+    before_raw = path.read_text(encoding="utf-8")
+    (sb.mcp_dir / "manifest.yaml").write_text(
+        """schema_version: 1
+servers:
+  missing-auth:
+    transport: http
+    url: https://example.invalid/mcp
+    targets: [codex]
+""",
+        encoding="utf-8",
+    )
+
+    mod = load_render_module(sb)
+    assert mod.write_codex() == 2
+    captured = capsys.readouterr()
+
+    assert "invalid MCP manifest" in captured.err
+    assert path.read_text(encoding="utf-8") == before_raw
+
+
 # ---- test 5: server fuori manifest preservato e segnalato ------------------
 
 @pytest.mark.parametrize("cli", DIALECTS)

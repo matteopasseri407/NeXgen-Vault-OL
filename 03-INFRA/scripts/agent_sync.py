@@ -15,6 +15,7 @@ Modes:
   guard    Recurring safe propagation: pull, regenerate CLI runtime files, run healthcheck. Does not push.
   apply    Same as guard, explicit manual name for provisioning.
   publish  Push already-committed local vault changes to the authoritative remote, then configured mirrors.
+  preflight  Validate every configuration input used by apply. Does not regenerate runtime files.
   doctor   Run healthcheck/alerts only.
   bootstrap-alerts  Provision optional alert credentials and run healthcheck.
 With no arguments: print help and change nothing. The recurring
@@ -41,6 +42,21 @@ from typing import Callable
 
 import yaml
 
+# This script is often run directly from a user's data-root compatibility
+# layout. Importing a validator must not create __pycache__ entries there,
+# especially on help/error paths that promise zero mutation.
+sys.dont_write_bytecode = True
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from config_schema import (
+    ConfigValidationError,
+    load_council_config,
+    load_mcp_manifest,
+    validate_claude_settings,
+)  # noqa: E402
+
 IS_WINDOWS = platform.system() == "Windows"
 
 HELP_TEXT = """agent_sync modes:
@@ -48,6 +64,7 @@ HELP_TEXT = """agent_sync modes:
   guard    Recurring safe propagation: pull, regenerate CLI runtime files, run healthcheck. Does not push.
   apply    Same as guard, explicit manual name for provisioning.
   publish  Push already-committed local vault changes to the authoritative remote, then configured mirrors.
+  preflight  Validate every configuration input used by apply. Does not regenerate runtime files.
   doctor   Run healthcheck/alerts only.
   bootstrap-alerts  Provision optional alert credentials and run healthcheck.
   config FIELD  Print resolved sync data. FIELD is authoritative_remote or mirrors.
@@ -63,6 +80,7 @@ MODES = {
     "guard":   dict(pull=True,  apply=True,  push=False, creds=False, health=True),
     "apply":   dict(pull=True,  apply=True,  push=False, creds=False, health=True),
     "publish": dict(pull=False, apply=False, push=True,  creds=False, health=False),
+    "preflight": dict(pull=False, apply=False, push=False, creds=False, health=False),
     "doctor":  dict(pull=False, apply=False, push=False, creds=False, health=True),
     "bootstrap-alerts": dict(pull=False, apply=False, push=False, creds=True, health=True),
 }
@@ -597,6 +615,43 @@ def data_migrations(env: Env) -> bool:
     return True
 
 
+def preflight(env: Env) -> bool:
+    """Reject invalid data before this run changes a generated runtime file.
+
+    The remote/host declaration is validated while ``Env`` is constructed.
+    This phase covers the remaining data inputs used by apply: MCP, optional
+    Council seats, skills, and the Claude hooks section that we may merge.
+    """
+    manifest_path = env.instance_ul / "mcp" / "manifest.yaml"
+    council_path = env.instance_ul / "council" / "seats.yaml"
+    settings_path = env.home / ".claude" / "settings.json"
+    try:
+        load_mcp_manifest(manifest_path)
+        if council_path.exists():
+            load_council_config(council_path)
+        validate_claude_settings(settings_path)
+    except ConfigValidationError as exc:
+        env.log(f"preflight: BLOCKED ({exc})")
+        return False
+
+    skills_sync = env.engine_scripts / "skills-sync.py"
+    if not skills_sync.is_file():
+        env.log(f"preflight: missing skills validator {skills_sync}")
+        return False
+    result = subprocess.run(
+        [sys.executable, str(skills_sync), "--validate"],
+        capture_output=True,
+        text=True,
+    )
+    _append_log(env, result.stdout, result.stderr)
+    if result.returncode != 0:
+        env.log("preflight: skills manifest or local source is invalid")
+        return False
+
+    env.log("preflight: MCP, Council, skills, Claude settings, and host remote config are valid")
+    return True
+
+
 # ── 1. pull ──────────────────────────────────────────────────────────────
 
 def pull(env: Env) -> PullOutcome:
@@ -1067,13 +1122,19 @@ def claude_hooks(env: Env) -> bool:
     claude_dir = env.home / ".claude"
     if not hook_src.is_file() or not claude_dir.is_dir():
         return True
+    settings_path = claude_dir / "settings.json"
+    try:
+        validate_claude_settings(settings_path)
+    except ConfigValidationError as exc:
+        env.log(f"claude-hooks: settings preflight failed ({exc})")
+        return False
+
     hook_dst = claude_dir / "claude-vault-checkpoint.mjs"
     src_bytes = hook_src.read_bytes()
     if not hook_dst.exists() or hook_dst.read_bytes() != src_bytes:
         hook_dst.write_bytes(src_bytes)
         env.log(f"claude-hooks: deployed {hook_dst}")
 
-    settings_path = claude_dir / "settings.json"
     if not settings_path.is_file():
         return True
     try:
@@ -1454,6 +1515,12 @@ def main(argv: list[str] | None = None) -> int:
                 env.log(f"pull: manual offline override accepted ({outcome.message})")
             else:
                 errors.append(f"pull:{outcome.state.value}")
+                apply_allowed = False
+
+        needs_preflight = flags["apply"] or mode == "preflight"
+        if needs_preflight and apply_allowed:
+            if not _run_phase(env, "preflight", preflight):
+                errors.append("preflight")
                 apply_allowed = False
 
         if flags["apply"] and apply_allowed:

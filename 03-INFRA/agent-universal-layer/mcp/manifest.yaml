@@ -11,6 +11,7 @@
 #    never by value. Secrets live in env / 99-SECRETS.
 #  - transport: "stdio" (local process) | "http" (remote server with bearer).
 #  - targets: which CLIs mount this server.
+#  - schema_version: keep this at 1 until a documented migration says otherwise.
 #  - Conditionality: servers marked `require_env` are included only if the
 #    user has set the matching environment variable. This way, a Local-Only
 #    install doesn't load MCP servers pointing at absent backends. The user
@@ -18,6 +19,8 @@
 #    matching env vars. The renderer must omit any server whose `require_env`
 #    is not satisfied.
 # ============================================================================
+
+schema_version: 1
 
 servers:
 
