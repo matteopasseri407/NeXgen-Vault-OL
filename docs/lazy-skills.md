@@ -22,6 +22,22 @@ Every manifest entry has an `origin`, optional native `targets`, and an
 - `core` is the rare exception for a genuinely universal policy body. It is
   visible through the active shared view, so use it sparingly.
 
+Two more optional fields exist for a small team sharing this framework:
+
+- `scope: personal | team` — default `team`, i.e. every existing manifest
+  entry behaves exactly as before this field existed.
+- `owner: <member-id>` — the identifier of whoever this skill is personal
+  to, matching an entry in `99-INDEX/USER-PROFILE.md` → "Team members
+  (optional)".
+
+`scope: personal` only has an effect when USER-PROFILE.md declares a Team
+members section at all (the mono-user default has none, so `scope` is
+inert there). When it does, `skills-sync.py` materializes a
+`scope: personal` skill only on the machine whose `AGENT_TEAM_MEMBER`
+environment variable matches the skill's `owner`; everywhere else it is
+skipped, with a clear line saying so. `scope: team` (or no `scope` at
+all) still propagates to every machine, same as today.
+
 Claude can keep declared manual views because it loads them lazily. Codex,
 OpenCode, Antigravity, and local workers use the same explicit command:
 

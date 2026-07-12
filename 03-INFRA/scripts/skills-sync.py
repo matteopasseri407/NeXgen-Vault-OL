@@ -59,6 +59,7 @@ _vault = Path(os.environ.get("KNOWLEDGE_VAULT_PATH") or str(HOME / "KnowledgeVau
 VAULT = Path(os.environ.get("AGENT_VAULT_DATA") or str(_vault))
 UL = VAULT / "03-INFRA" / "agent-universal-layer"
 MANIFEST = UL / "skills" / "skills.manifest.yaml"
+USER_PROFILE = VAULT / "99-INDEX" / "USER-PROFILE.md"
 
 LIBRARY = HOME / ".agents" / "skill-library"
 ACTIVE = HOME / ".agents" / "skills"
@@ -70,6 +71,7 @@ RUNTIME = {
 IS_WINDOWS = platform.system() == "Windows"
 GIT_CLONE_TIMEOUT_SECONDS = 60
 GIT_COMMIT_SHA = re.compile(r"[0-9a-fA-F]{40}\Z")
+TEAM_MEMBERS_HEADING_RE = re.compile(r"(?im)^##\s+team members\b")
 
 PASS = WARN = ACT = FAILN = 0
 
@@ -495,6 +497,25 @@ def migrate_legacy_views(apply: bool, skills: dict[str, dict]) -> None:
             act(f"legacy/{scope}/{entry.name}: quarantined outside discovery roots")
 
 
+def team_mode_active() -> bool:
+    """True only when USER-PROFILE.md declares a "Team members" section.
+
+    A mono-user install (the default, and the overwhelming majority of
+    installs today) either has no USER-PROFILE.md worth parsing or one
+    without that section, and this returns False -- which keeps every
+    skill's optional `scope` field fully inert: sync behaves exactly as it
+    did before `scope` existed. This is a cheap presence check, not a
+    parse of the section's contents: which member owns which host is a
+    human/agent-facing declaration (see USER-PROFILE.md), not something
+    this script resolves on its own.
+    """
+    try:
+        text = USER_PROFILE.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return bool(TEAM_MEMBERS_HEADING_RE.search(text))
+
+
 def load_skills_manifest() -> dict | None:
     """Load the user-owned manifest without letting malformed YAML crash sync."""
     try:
@@ -555,6 +576,16 @@ def load_skills_manifest() -> dict | None:
                 return None
         if "path" in spec and not isinstance(spec["path"], str):
             fail(f"invalid skills manifest: skill '{name}' path must be a string")
+            return None
+        scope = spec.get("scope", "team")
+        if scope not in {"personal", "team"}:
+            fail(
+                f"invalid skills manifest: skill '{name}' scope must be "
+                "'personal' or 'team'"
+            )
+            return None
+        if "owner" in spec and not isinstance(spec["owner"], str):
+            fail(f"invalid skills manifest: skill '{name}' owner must be a string")
             return None
 
     return skills
@@ -635,8 +666,25 @@ def main() -> int:
 
     # state of the Claude runtime: symlink-folder pointing at the library?
     claude_is_library_link = resolves_to(RUNTIME["claude"], LIBRARY)
+    team_mode = team_mode_active()
     for name, spec in skills.items():
         sec(f"skill: {name}")
+
+        # scope: personal only ever filters anything when USER-PROFILE.md
+        # declares a Team members section. Without that section (the
+        # mono-user default), a personal-scoped skill syncs exactly like a
+        # team-scoped one, unchanged from before `scope` existed.
+        scope = spec.get("scope", "team")
+        if scope == "personal" and team_mode:
+            owner = spec.get("owner")
+            member = os.environ.get("AGENT_TEAM_MEMBER")
+            if not owner:
+                warn(f"{name}: scope 'personal' has no 'owner', skipping while Team members is declared")
+                continue
+            if member != owner:
+                ok(f"{name}: personal to '{owner}', not this machine ('{member or 'unset'}'), skipping")
+                continue
+
         origin = spec.get("origin")
         targets = spec.get("targets", [])
         exposure = spec.get("exposure", "manual")

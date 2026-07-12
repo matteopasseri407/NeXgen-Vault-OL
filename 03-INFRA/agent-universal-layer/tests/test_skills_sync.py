@@ -84,6 +84,108 @@ def test_core_skill_is_the_only_kind_exposed_to_eager_views(sandbox, monkeypatch
     assert (sandbox.home / ".codex" / "skills" / "fake-skill-a").resolve() == library.resolve()
 
 
+def _write_user_profile_with_team_members(sandbox) -> None:
+    profile_dir = sandbox.vault / "99-INDEX"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    (profile_dir / "USER-PROFILE.md").write_text(
+        "# User Profile\n\n"
+        "## Team members (optional)\n\n"
+        "- **marco**:\n"
+        "  - Host(s): Primary workstation\n",
+        encoding="utf-8",
+    )
+
+
+def _personal_skill_manifest(owner: str = "marco") -> str:
+    return (
+        "skills:\n"
+        "  fake-skill-a:\n"
+        "    origin: vault\n"
+        "    targets: [claude, codex]\n"
+        "    scope: personal\n"
+        f"    owner: {owner}\n"
+    )
+
+
+def test_personal_skill_syncs_like_before_without_a_team_members_section(sandbox, monkeypatch):
+    """Retrocompatibilita': mono-utente (nessuna sezione Team members in
+    USER-PROFILE.md, il caso di gran lunga piu' comune) -> `scope` non
+    cambia alcun comportamento osservabile, anche se dichiarato personal
+    per qualcun altro e AGENT_TEAM_MEMBER non e' impostato."""
+    monkeypatch.delenv("AGENT_TEAM_MEMBER", raising=False)
+    (sandbox.skills_dir / "skills.manifest.yaml").write_text(
+        _personal_skill_manifest(owner="marco"), encoding="utf-8",
+    )
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
+
+    assert mod.main() == 0
+    assert (sandbox.skill_library / "fake-skill-a" / "SKILL.md").is_file()
+
+
+def test_personal_skill_is_skipped_on_a_machine_that_is_not_its_owner(sandbox, monkeypatch):
+    """Team dichiarato (sezione presente) + AGENT_TEAM_MEMBER assente/diverso
+    dal proprietario -> la skill personal non si materializza su questa
+    macchina."""
+    _write_user_profile_with_team_members(sandbox)
+    monkeypatch.delenv("AGENT_TEAM_MEMBER", raising=False)
+    (sandbox.skills_dir / "skills.manifest.yaml").write_text(
+        _personal_skill_manifest(owner="marco"), encoding="utf-8",
+    )
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
+
+    assert mod.main() == 0
+    assert not (sandbox.skill_library / "fake-skill-a").exists()
+
+
+def test_personal_skill_syncs_on_its_declared_owners_machine(sandbox, monkeypatch):
+    """Stesso team dichiarato, ma AGENT_TEAM_MEMBER combacia col proprietario
+    dichiarato -> la skill personal si materializza normalmente."""
+    _write_user_profile_with_team_members(sandbox)
+    monkeypatch.setenv("AGENT_TEAM_MEMBER", "marco")
+    (sandbox.skills_dir / "skills.manifest.yaml").write_text(
+        _personal_skill_manifest(owner="marco"), encoding="utf-8",
+    )
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
+
+    assert mod.main() == 0
+    assert (sandbox.skill_library / "fake-skill-a" / "SKILL.md").is_file()
+
+
+def test_team_scope_skill_still_syncs_everywhere_even_with_team_members_declared(sandbox, monkeypatch):
+    """`scope: team` (o assente) non e' mai filtrato, con o senza team
+    dichiarato: si propaga a tutti come oggi."""
+    _write_user_profile_with_team_members(sandbox)
+    monkeypatch.setenv("AGENT_TEAM_MEMBER", "someone-else")
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
+
+    assert mod.main() == 0
+    assert (sandbox.skill_library / "fake-skill-a" / "SKILL.md").is_file()
+    assert (sandbox.skill_library / "fake-skill-excluded" / "SKILL.md").is_file()
+
+
+def test_personal_skill_without_owner_is_skipped_with_a_warning_while_team_is_declared(sandbox, monkeypatch, capsys):
+    _write_user_profile_with_team_members(sandbox)
+    monkeypatch.setenv("AGENT_TEAM_MEMBER", "marco")
+    (sandbox.skills_dir / "skills.manifest.yaml").write_text(
+        "skills:\n"
+        "  fake-skill-a:\n"
+        "    origin: vault\n"
+        "    targets: [claude, codex]\n"
+        "    scope: personal\n",
+        encoding="utf-8",
+    )
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
+
+    assert mod.main() == 0
+    assert not (sandbox.skill_library / "fake-skill-a").exists()
+    assert "no 'owner'" in capsys.readouterr().out
+
+
 def test_legacy_migration_is_explicit_and_preserves_the_old_body(sandbox, monkeypatch):
     old = sandbox.active_skills / "old-local-skill"
     old.mkdir(parents=True)
@@ -272,6 +374,14 @@ def test_github_skill_rejects_a_different_fetched_commit(sandbox, monkeypatch, c
         (
             "skills:\n  bad:\n    origin: vault\n    targets: []\n    exposure: eager\n",
             "exposure must be 'manual' or 'core'",
+        ),
+        (
+            "skills:\n  bad:\n    origin: vault\n    targets: []\n    scope: whoever\n",
+            "scope must be 'personal' or 'team'",
+        ),
+        (
+            "skills:\n  bad:\n    origin: vault\n    targets: []\n    owner: 5\n",
+            "owner must be a string",
         ),
     ],
 )
