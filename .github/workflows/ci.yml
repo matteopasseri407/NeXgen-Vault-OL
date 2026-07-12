@@ -9,11 +9,11 @@ jobs:
   self-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
 
@@ -94,9 +94,9 @@ jobs:
     # after intentionally fixing or accepting findings.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
 
@@ -113,7 +113,7 @@ jobs:
   shellcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: ShellCheck all shell scripts
         # Same discovery pattern as the "Shell syntax check" step in
@@ -124,9 +124,9 @@ jobs:
   dependency-audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
 
@@ -159,7 +159,7 @@ jobs:
   compose-validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Validate Docker Compose files
         # `docker compose config` only parses/merges/validates the model
@@ -183,7 +183,7 @@ jobs:
     # stays the only job that runs anything on Windows.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: PowerShell version
         # ubuntu-latest GitHub-hosted runners ship PowerShell Core (pwsh)
@@ -223,9 +223,9 @@ jobs:
     # tests/run.sh, which is a thin Fedora-only convenience wrapper).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
 
@@ -242,9 +242,9 @@ jobs:
     # value is the direct agent_sync.py guard smoke in a sandboxed USERPROFILE.
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
 
