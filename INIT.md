@@ -17,8 +17,8 @@ Chiedi all'utente, una domanda alla volta:
 1. **Quante CLI vuole usare?** Una sola (es. solo Claude Code), o più di una?
 2. **Quante macchine?** Solo questa, o più workstation (es. laptop + desktop) che devono restare allineate?
 3. **Hardware della macchina principale**: sistema operativo (Windows, Mac, Linux) e GPU dedicata (se presente, per modelli locali).
-4. **Architettura Cloud vs Locale**:
-   - Ha a disposizione un server remoto / VPS per far girare n8n, Firecrawl e OCR (modalità **Cloud-Server**)? Se sì, chiedi IP, utente SSH, e quali porte usare per i tunnel SSH.
+4. **Architettura Cloud vs Locale** (in parole povere: un VPS è un computer sempre acceso che si affitta online, e un tunnel SSH è il collegamento sicuro per raggiungerlo da qui — se questi termini non dicono nulla all'utente, probabilmente vuole Local-Only):
+   - Ha a disposizione un server remoto / VPS per far girare n8n, Firecrawl e OCR (modalità **Cloud-Server**)? Se sì, chiedi IP, utente SSH, e quali porte usare per i tunnel SSH. Se quel VPS sarà condiviso tra più persone della stessa organizzazione, rimanda l'utente a `docs/org-deployment.md` prima di procedere: oggi non c'è controllo accessi per-persona su un backend condiviso.
    - Oppure preferisce un'installazione **Local-Only** su un singolo PC (0 VPS, tutto locale)? Se sceglie Local-Only, digli che la web search userà il tool nativo della CLI, l'OCR userà la vision del modello, e non ci saranno automazioni remote.
 
 Determina il profilo dalle risposte:
@@ -114,6 +114,7 @@ Dai il benvenuto in Agent-OS.
 Se l'utente deve gestire segreti (password, API key, token, chiavi SSH, credenziali dei tunnel), spiega la meccanica della cartella `99-SECRETS/`:
 
 - I valori veri stanno solo nell'archivio cifrato `99-SECRETS/archive/master-secrets.md.gpg`, protetto da una passphrase che conosce solo l'utente. Si crea al primo segreto ed è git-ignored.
+- Se quella passphrase viene dimenticata, tutto il contenuto dell'archivio cifrato è perso per sempre: non esiste alcun recupero. Consiglia all'utente un password manager, oppure un backup fisico della sola passphrase (mai del contenuto in chiaro dei segreti).
 - L'indice non sensibile `99-SECRETS/secrets-registry.md` elenca quali segreti esistono (nome, provider, nome della variabile d'ambiente, data di rotazione), mai i valori. È tracciato da git, così la mappa resta allineata tra le macchine.
 - Regola operativa: a ogni creazione o rotazione di un segreto, aggiorna sia l'archivio cifrato sia la registry, entrambi prima di considerare il task concluso. Mai incollare un valore in una nota normale.
 
@@ -134,8 +135,8 @@ Ask the user, one question at a time:
 1. **How many CLIs do they want to use?** Just one (e.g. only Claude Code), or more than one (Claude Code, Codex, OpenCode, Antigravity)?
 2. **How many machines?** Just this one, or multiple workstations (e.g. laptop + desktop) that must stay aligned?
 3. **Hardware of the main machine**: operating system (Windows, Mac, Linux) and dedicated GPU (if any, for local models).
-4. **Cloud vs Local architecture**:
-   - Do they have a remote server / VPS available to run n8n, Firecrawl and OCR (**Cloud-Server** mode)? If yes, ask for the IP, SSH user, and which ports to use for SSH tunnels.
+4. **Cloud vs Local architecture** (in plain terms: a VPS is an always-on computer you rent online, and an SSH tunnel is the secure connection to reach it from here — if those words mean nothing to the user, they probably want Local-Only):
+   - Do they have a remote server / VPS available to run n8n, Firecrawl and OCR (**Cloud-Server** mode)? If yes, ask for the IP, SSH user, and which ports to use for SSH tunnels. If that VPS will be shared across multiple people in the same organization, point the user to `docs/org-deployment.md` before proceeding: there is no per-person access control on a shared backend today.
    - Or do they prefer a **Local-Only** install on a single PC (no VPS, everything local)? If they choose Local-Only, tell them web search will use the CLI's native tool, OCR will use the model's vision, and there will be no remote automations.
 
 Determine the profile from the answers:
@@ -231,6 +232,7 @@ Welcome to Agent-OS.
 If the user needs to handle secrets (passwords, API keys, tokens, SSH keys, tunnel credentials), explain how the `99-SECRETS/` folder works:
 
 - Actual values live only in the encrypted archive `99-SECRETS/archive/master-secrets.md.gpg`, protected by a passphrase only the user knows. It is created on the first secret and is git-ignored.
+- If that passphrase is forgotten, everything in the encrypted archive is lost permanently: there is no recovery. Suggest a password manager, or a physical backup of the passphrase itself only, never of the plaintext secret values.
 - The non-sensitive index `99-SECRETS/secrets-registry.md` lists which secrets exist (name, provider, env var, rotation date), never values. It is git-tracked so the map stays aligned across machines.
 - Operating rule: on every create or rotation of a secret, update both the encrypted archive and the registry, both before considering the task done. Never paste a value into a normal note.
 
