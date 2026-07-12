@@ -2,10 +2,32 @@
 # Upstream: https://github.com/mendableai/firecrawl
 # This compose deploys the API + a single worker. For production scale-out
 # add more workers or a Redis cluster; see the upstream repo.
+#
+# Images are pinned to explicit version tags (no "latest") so a redeploy is
+# reproducible. To also pin sha256 digests once you have Docker/registry
+# access:
+#   docker pull ghcr.io/mendableai/firecrawl:2.11.0
+#   docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/mendableai/firecrawl:2.11.0
+# then set FIRECRAWL_IMAGE (and FIRECRAWL_PLAYWRIGHT_IMAGE) in .env to the
+# printed ...@sha256:... value.
+#
+# NOTE (verify before deploying): the upstream Firecrawl project has been
+# reorganizing its self-host images under the `ghcr.io/firecrawl/*` org and
+# a different multi-service architecture (Postgres-backed queue, SearXNG).
+# The ghcr.io/mendableai/* path below matches this repo's existing simpler
+# API+worker+Redis+Playwright shape; confirm it still resolves on the
+# registry before a production deploy, and re-check upstream's current
+# self-host docs if it does not. This is a pre-existing shape decision, not
+# something this pass changes.
+#
+# Rollback: FIRECRAWL_IMAGE=ghcr.io/mendableai/firecrawl:<older-tag> docker
+# compose -f firecrawl/docker-compose.yml up -d (see ../backup-restore.sh
+# rollback). No named volumes here — Redis is a transient cache/queue by
+# design, so there is nothing durable to back up in this stack today.
 
 services:
   firecrawl-api:
-    image: ghcr.io/mendableai/firecrawl:latest
+    image: ${FIRECRAWL_IMAGE:-ghcr.io/mendableai/firecrawl:2.11.0}
     container_name: firecrawl-api
     restart: unless-stopped
     command: ["pnpm", "start:production"]
@@ -17,13 +39,22 @@ services:
       - PLAYWRIGHT_MICROSERVICE_URL=http://firecrawl-playwright:3000
       # Secrets: set these in .env on the VPS, never commit them.
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - "HEALTHCHECK_JS=require('http').get('http://127.0.0.1:3002/', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"
     depends_on:
-      - firecrawl-redis
-      - firecrawl-playwright
+      firecrawl-redis:
+        condition: service_healthy
+      firecrawl-playwright:
+        condition: service_healthy
     mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"$HEALTHCHECK_JS\""]
+      interval: 30s
+      timeout: 5s
+      start_period: 45s
+      retries: 3
 
   firecrawl-worker:
-    image: ghcr.io/mendableai/firecrawl:latest
+    image: ${FIRECRAWL_IMAGE:-ghcr.io/mendableai/firecrawl:2.11.0}
     container_name: firecrawl-worker
     restart: unless-stopped
     command: ["pnpm", "worker:production"]
@@ -31,18 +62,43 @@ services:
       - REDIS_URL=redis://firecrawl-redis:6379
       - PLAYWRIGHT_MICROSERVICE_URL=http://firecrawl-playwright:3000
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # The worker has no HTTP port of its own; this healthcheck proves it
+      # can still reach Redis (its queue), which is the closest available
+      # liveness signal without one.
+      - "HEALTHCHECK_JS=require('net').connect(6379, 'firecrawl-redis').on('connect', s => { s.end(); process.exit(0); }).on('error', () => process.exit(1))"
     depends_on:
-      - firecrawl-redis
+      firecrawl-redis:
+        condition: service_healthy
     mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"$HEALTHCHECK_JS\""]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
 
   firecrawl-redis:
-    image: redis:alpine
+    image: ${FIRECRAWL_REDIS_IMAGE:-redis:8.2.7-alpine}
     container_name: firecrawl-redis
     restart: unless-stopped
     mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
 
   firecrawl-playwright:
-    image: ghcr.io/mendableai/firecrawl-playwright-service:latest
+    image: ${FIRECRAWL_PLAYWRIGHT_IMAGE:-ghcr.io/mendableai/firecrawl-playwright-service:2.11.0}
     container_name: firecrawl-playwright
     restart: unless-stopped
+    environment:
+      - "HEALTHCHECK_JS=require('net').connect(3000, '127.0.0.1').on('connect', s => { s.end(); process.exit(0); }).on('error', () => process.exit(1))"
     mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"$HEALTHCHECK_JS\""]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3

@@ -1,7 +1,23 @@
+# Vault OCR API (FastAPI + RapidOCR), built locally from ./api.
+#
+# Tagged with an explicit version (matching the FastAPI app's own `version=`
+# in api/app.py) instead of "latest", so `docker images` and rollbacks are
+# unambiguous even though the image is built on the VPS rather than pulled.
+# To pin a digest for a build you trust, build once, then:
+#   docker inspect --format '{{index .RepoDigests 0}}' vault-ocr-api:1.0.0
+# (only populated once the image has been pushed to a registry you control —
+# a purely local build has no RepoDigest to pin).
+#
+# Rollback: keep the previous build tagged (e.g. `docker tag vault-ocr-api:1.0.0
+# vault-ocr-api:1.0.0-prev` before rebuilding), then:
+#   OCR_IMAGE=vault-ocr-api:1.0.0-prev docker compose -f ocr/docker-compose.yml up -d --no-build
+# (see ../backup-restore.sh rollback). This service has no named volume —
+# nothing to back up.
+
 services:
   vault-ocr-api:
     build: ./api
-    image: vault-ocr-api:latest
+    image: ${OCR_IMAGE:-vault-ocr-api:1.0.0}
     container_name: vault-ocr-api
     restart: unless-stopped
     ports:
