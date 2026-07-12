@@ -808,6 +808,58 @@ def _build_seat_command(seat: dict, prompt: str, session_dir: Path) -> SeatInvoc
     so it receives a static instruction plus a protected prompt file instead.
     Codex keeps its final response in a separate protected output file because
     its stdout also carries progress and warnings.
+
+    CLI-level enforcement of "no tools" is NOT equivalent across the five
+    CLIs below, even though every seat prompt (``council/prompts/*.md``)
+    carries the same textual "non hai strumenti e non devi usarne" line as a
+    baseline.  Verified 2026-07-12 against the real installed binaries
+    (``--help`` output plus, where the flag's actual scope was ambiguous
+    from ``--help`` alone, live invocations inspected via the CLI's own
+    JSONL session logs):
+
+    - ``claude``: ``--tools ""`` is a comprehensive, documented, CLI-enforced
+      block — no tool is invocable by construction, independent of the
+      prompt. This is the only seat where "no tools" is a guarantee, not a
+      request.
+    - ``codex``: ``-s read-only`` is documented by ``codex exec --help`` as
+      scoping "the sandbox policy... when executing model-generated shell
+      commands" — i.e. the shell/exec tool only. It says nothing about MCP
+      servers, and live testing (comparing ``-s read-only`` against
+      ``-s danger-full-access`` via the rollout JSONL, and testing
+      ``--ignore-user-config`` to see if it drops MCP servers from the
+      session) found no flag that closes that gap without an unacceptable
+      risk of silently breaking the seat's output. Codex relies on the
+      textual prompt instruction, same as opencode below.
+    - ``agy``: ``--sandbox`` is described by Antigravity's own embedded
+      product docs (extracted from the installed binary) as scoping the
+      "run_command" tool specifically ("no network access... unless added
+      explicitly by the user") — again shell/terminal-command scoped, not a
+      documented MCP block. No ``--no-mcp``/``--tools`` equivalent flag
+      exists in ``agy --help``. Live verification of whether this also
+      blocks the CLI's own MCP tool calls was not possible during this
+      review (Antigravity subscription quota was exhausted on every model
+      tried); treat this CLI as prompt-only until someone confirms
+      otherwise live.
+    - ``opencode``: no CLI-level tool/MCP block exists at all. ``--pure``
+      disables external *plugins*, a different subsystem from MCP servers.
+      ``OPENCODE_CONFIG``/``OPENCODE_CONFIG_CONTENT`` were tested and found
+      to merge with (not replace) the user's global ``opencode.json``, so
+      they cannot isolate a run from already-configured MCP servers. A
+      working per-server ``"mcp": {"<name>": {"enabled": false}}`` override
+      does exist (confirmed via ``opencode debug config``), but applying it
+      here would require shelling out to an undocumented ``debug``
+      subcommand to enumerate the user's server names before every seat
+      invocation — fragile, version-unstable, and not worth the added
+      failure surface for an unverified gain. Prompt-only, like codex.
+    - ``ollama``: ``ollama run <model>`` has no tool-calling/agent-loop
+      surface at all unless the (undocumented-by-default) ``--experimental``
+      flag is passed — confirmed via ``ollama run --help`` on this machine.
+      This seat never passes it, so there is nothing for an MCP server to be
+      reachable through: verified safe by construction, not just by prompt.
+
+    See the "Council CLI-level enforcement is asymmetric" note in
+    ``instructions/AGENTS.md`` (next to the "Council exception" paragraph)
+    for the user-facing version of this same finding.
     """
     cli = seat["cli"]
     model = seat["model"]
@@ -827,9 +879,10 @@ def _build_seat_command(seat: dict, prompt: str, session_dir: Path) -> SeatInvoc
         # Print mode reads stdin when no positional prompt is supplied.  Keeping
         # the brief out of argv avoids both the Windows command-line cap and the
         # POSIX single-argument cap.
-        # --sandbox = restrizioni terminale, mai --dangerously-skip-permissions
-        # (coerente con "consulenti senza mani": qualunque tool richieda conferma
-        # interattiva non ha modo di ottenerla in modalita' non interattiva).
+        # --sandbox = restrizioni sul tool run_command (niente rete/filesystem
+        # fuori workspace per i comandi shell), mai --dangerously-skip-permissions.
+        # Non e' un blocco MCP documentato: vedi la nota estesa sopra
+        # _build_seat_command per cosa e' verificato e cosa no per questa CLI.
         return SeatInvocation(
             ["agy", "--print", "--model", model, "--sandbox"],
             prompt,
@@ -849,7 +902,8 @@ def _build_seat_command(seat: dict, prompt: str, session_dir: Path) -> SeatInvoc
         # ``codex exec -`` reads the initial prompt from stdin.  Without -o,
         # stdout includes banner/warning/progress beyond the final answer.
         # -s read-only is the same sandbox validated in A0, with no write access
-        # for the consultant seat.
+        # for the consultant seat. It scopes the shell/exec tool only, not MCP
+        # servers: see the extended note above _build_seat_command.
         fd, tmp_name = tempfile.mkstemp(prefix="council-codex-", suffix=".txt")
         os.close(fd)
         output_file = Path(tmp_name)
