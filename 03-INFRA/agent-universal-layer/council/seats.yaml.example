@@ -12,6 +12,20 @@
 # Senza un seats.yaml valido in quel percorso, `council` si ferma e spiega
 # cosa manca: l'espansione è disattivata di default, zero dipendenze forzate.
 #
+# Piccolo team, più seat file (opzionale, retrocompatibile al 100%):
+# per default resta un solo seats.yaml condiviso, esattamente come sopra.
+# Se più persone vogliono i propri seat senza contendersi lo stesso file,
+# due override puramente opzionali, in quest'ordine:
+#   1. COUNCIL_SEATS_FILE=/percorso/assoluto/ai/tuoi/seats.yaml
+#      path esplicito, vince su tutto il resto.
+#   2. AGENT_TEAM_MEMBER=<nome>
+#      lo stesso identificatore dichiarato in
+#      99-INDEX/USER-PROFILE.md -> "Team members (optional)"; risolve a
+#      seats.<nome>.yaml accanto al seats.yaml di default, es.
+#      $AGENT_VAULT_DATA/.../council/seats.marco.yaml per AGENT_TEAM_MEMBER=marco.
+# Nessuna delle due viene letta se non e' impostata: chi ha gia' un
+# seats.yaml singolo non nota alcuna differenza.
+#
 # Criteri generali per scegliere i seat (non i modelli specifici):
 #   - usa CLI già pagate ad abbonamento flat che hai comunque, mai una nuova
 #     API a consumo aperta solo per questo;

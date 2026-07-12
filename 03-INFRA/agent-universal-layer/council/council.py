@@ -102,7 +102,36 @@ def _vault_data_root() -> Path:
     return Path(os.environ.get("AGENT_VAULT_DATA") or str(vault))
 
 
-SEATS_PATH = _vault_data_root() / "03-INFRA" / "agent-universal-layer" / "council" / "seats.yaml"
+def _seats_path() -> Path:
+    """Resolve which seats file this invocation uses.
+
+    Default and unchanged: a single shared seats.yaml in the vault data root
+    -- that is 100% of today's installs, and nothing below alters it unless
+    one of these two variables is actually set.
+
+    A small team wants more than one person's seat file without everyone
+    contending for the same one. Two purely additive, opt-in overrides,
+    checked in this order:
+
+      1. COUNCIL_SEATS_FILE: an explicit path to a seats file. Wins outright.
+      2. AGENT_TEAM_MEMBER: the same "who am I on this machine" identifier
+         documented in 99-INDEX/USER-PROFILE.md -> Team members (optional).
+         Resolves to seats.<member>.yaml next to the default file.
+
+    Neither is read unless set, so a mono-user install with a plain
+    seats.yaml sees byte-for-byte the same resolution as before this existed.
+    """
+    council_dir = _vault_data_root() / "03-INFRA" / "agent-universal-layer" / "council"
+    override = os.environ.get("COUNCIL_SEATS_FILE")
+    if override:
+        return Path(override).expanduser()
+    member = os.environ.get("AGENT_TEAM_MEMBER")
+    if member:
+        return council_dir / f"seats.{member}.yaml"
+    return council_dir / "seats.yaml"
+
+
+SEATS_PATH = _seats_path()
 
 
 def _routing_document_path(config: dict) -> Path:

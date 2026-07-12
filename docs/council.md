@@ -20,6 +20,11 @@ completely inert. Nothing about the rest of the engine depends on it.
    ```
    (adjust the path if `AGENT_VAULT_DATA`/`KNOWLEDGE_VAULT_PATH` points
    somewhere else). This file is your data, never committed to the engine.
+   A small team can give each person their own file instead of one shared
+   `seats.yaml` — see the "more than one seats file" comment near the top
+   of `seats.yaml.example` for the `COUNCIL_SEATS_FILE` /
+   `AGENT_TEAM_MEMBER` overrides. Neither is read unless set, so this does
+   not change anything for a single-user install.
 2. Keep `schema_version: 1` at the root, then pick the seats you have,
    following the comments in the template. Each seat needs `vendor`, `cli`,
    `model`, and an explicit `zero_retention: true|false`. `cli` must be one
