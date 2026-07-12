@@ -1,4 +1,19 @@
-fastapi==0.115.6
+# fastapi==0.139.0 pulls starlette>=1.3.1 (unpinned here, matching the
+# pattern for every other transitive dep in this file). This closes the
+# tracked debt: fastapi==0.115.6 pinned starlette<0.42.0, which could never
+# satisfy a patched starlette release (fixes start at 0.47.2) -- 8 CVEs
+# open (PYSEC-2026-{161,248,249,1941,1942}, CVE-2026-{48817,48818}).
+# Validated for real, 2026-07-12 (Python 3.12.13 venv, no Docker in that
+# sandbox): full pytest suite green, a live TestClient round-trip through
+# the real (non-stubbed) RapidOCR engine on a synthetic PNG succeeded on
+# both /health and /ocr, and `pip-audit -r requirements.txt` against this
+# exact pin set reports zero known vulnerabilities (down from the 8 above
+# on the previous pin). Independently re-verified 2026-07-13: a clean venv
+# with fastapi==0.139.0 resolves starlette==1.3.1 and pip-audit reports
+# zero findings on fastapi/starlette/uvicorn/python-multipart. See
+# .github/workflows/ci.yml's dependency-audit job, which drops its
+# --ignore-vuln list for this file accordingly.
+fastapi==0.139.0
 uvicorn[standard]==0.34.0
 python-multipart==0.0.32
 rapidocr==3.9.1

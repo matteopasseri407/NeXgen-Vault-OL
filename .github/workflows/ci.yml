@@ -141,28 +141,38 @@ jobs:
       - name: Install pip-audit
         run: pip install pip-audit
 
-      - name: pip-audit (every requirements*.txt in the repo)
+      - name: pip-audit (OCR requirements.txt)
+        # Kept as its own step, scoped to exactly this one path, so a future
+        # tracked --ignore-vuln exception for the OCR stack can never
+        # silently leak onto any OTHER requirements*.txt discovered
+        # elsewhere in the repo (Finding B, 2026-07-12: a single find|xargs
+        # sweep used to apply the same --ignore-vuln flags to every
+        # requirements*.txt found, OCR or not).
+        #
+        # No --ignore-vuln flags needed right now: fastapi was bumped to
+        # 0.139.0 (-> starlette>=1.3.1), closing the 8 previously-tracked
+        # starlette CVEs (PYSEC-2026-{161,248,249,1941,1942},
+        # CVE-2026-{48817,48818}) -- validated live, 2026-07-12/13, see the
+        # comment above the fastapi pin in requirements.txt. If a new,
+        # narrow, tracked exception is ever needed again for this file, add
+        # --ignore-vuln flags ONLY to this step, never to the sweep below.
+        run: pip-audit -r 03-INFRA/deploy/ocr/api/requirements.txt
+
+      - name: pip-audit (every other requirements*.txt in the repo)
         # No package.json/package-lock.json exists in this repo (checked at
         # the time this job was added) so there is no npm audit step; add
         # one alongside this if a Node project shows up later.
         #
-        # --ignore-vuln entries below are a known, tracked debt, not a
-        # blanket suppression: fastapi==0.115.6 (03-INFRA/deploy/ocr/api/
-        # requirements.txt) pins `starlette<0.42.0`, which cannot satisfy any
-        # patched starlette release (fixes start at 0.47.2) -- fixing these
-        # needs a validated fastapi major-version bump against a real
-        # rapidocr/onnxruntime stack, out of scope for the pass that added
-        # this gate (verified live via pip-audit, 2026-07-12). Any OTHER new
-        # finding, on starlette or any other package, still fails the build.
-        # Remove these IDs the moment fastapi is bumped and re-verified.
+        # Never gets --ignore-vuln: any OTHER requirements*.txt that shows
+        # up in the repo gets the strict, unmodified scan. --no-run-if-empty
+        # matters here because GNU xargs otherwise still invokes the command
+        # once with a dangling `-r` and no path when find matches nothing --
+        # the common case today, since the OCR file is the only
+        # requirements*.txt in the repo.
         run: |
-          IGNORE_STARLETTE_UNTIL_FASTAPI_BUMP="--ignore-vuln PYSEC-2026-161 --ignore-vuln PYSEC-2026-249 --ignore-vuln PYSEC-2026-248 --ignore-vuln PYSEC-2026-1942 --ignore-vuln PYSEC-2026-1941 --ignore-vuln CVE-2026-48818 --ignore-vuln CVE-2026-48817"
-          # -r must be the LAST flag: `xargs -n1` appends the found file path
-          # as the final argument, so -r's value has to be right there, not
-          # followed by more --ignore-vuln flags (verified live in CI,
-          # 2026-07-12: "-r/--requirement: expected one argument").
-          find . -path ./.git -prune -o -iname "requirements*.txt" -print0 \
-            | xargs -0 -n1 pip-audit $IGNORE_STARLETTE_UNTIL_FASTAPI_BUMP -r
+          find . -path ./.git -prune -o -path ./03-INFRA/deploy/ocr/api/requirements.txt -prune \
+            -o -iname "requirements*.txt" -print0 \
+            | xargs --no-run-if-empty -0 -n1 pip-audit -r
 
   compose-validate:
     runs-on: ubuntu-latest
