@@ -109,6 +109,50 @@ def test_data_migrations_missing_step_stops_without_guessing(sandbox):
     )
 
 
+def test_data_migrations_stamps_each_completed_step_before_the_next_runs(sandbox):
+    """Regression for finding 22: the marker used to be written only after the
+    WHOLE chain finished, so a crash in step 2 of a 3-step chain left the
+    marker at v1 -- a retry would redo step 1->2 a second time even though it
+    already succeeded. Each step must be durably stamped as soon as IT
+    succeeds."""
+    mod = load_agent_sync_module(sandbox)
+    env = mod.Env()
+
+    schema_file = env.vault_data / "99-INDEX" / "DATA-SCHEMA-VERSION.txt"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text("1\n", encoding="utf-8")
+
+    calls = []
+
+    def step_1_to_2(e):
+        calls.append("1->2")
+        return []
+
+    def step_2_to_3_crashes(e):
+        calls.append("2->3")
+        raise RuntimeError("simulated crash mid-chain")
+
+    mod.MIGRATIONS = {1: step_1_to_2, 2: step_2_to_3_crashes}
+    mod.TARGET_SCHEMA_VERSION = 3
+
+    with pytest.raises(RuntimeError):
+        mod.data_migrations(env)
+
+    assert calls == ["1->2", "2->3"]
+    assert schema_file.read_text(encoding="utf-8").strip() == "2", (
+        "step 1->2 completed successfully and must be durably recorded even "
+        "though step 2->3 crashed right after"
+    )
+
+    # A retry must resume from v2, not redo the already-applied 1->2 step.
+    calls.clear()
+    mod.MIGRATIONS = {1: step_1_to_2, 2: lambda e: (calls.append("2->3 retry"), [])[1]}
+    mod.data_migrations(env)
+
+    assert calls == ["2->3 retry"], "retry replayed an already-completed step"
+    assert schema_file.read_text(encoding="utf-8").strip() == "3"
+
+
 # ── agent-doctor: check "nuova versione motore disponibile" (B3) ────────
 
 def _git(*args: str, cwd) -> None:

@@ -743,3 +743,42 @@ def test_alert_creds_credential_id_is_not_interpolated_into_remote_script(sandbo
     assert capture_output is True
     assert text is True
     assert timeout == 20
+
+
+def test_systemd_env_line_quotes_values_with_spaces(sandbox):
+    """Regression for finding 13: an unquoted 'Environment=KEY=value with
+    spaces' splits on whitespace in systemd, so the unit silently sees a
+    truncated path instead of the real one. The whole assignment must be
+    quoted, per systemd.syntax(7)."""
+    mod = load_agent_sync_module(sandbox)
+
+    quoted = mod._systemd_env_line("AGENT_ENGINE_ROOT", "/opt/agents/nexgen engine")
+    assert quoted == 'Environment="AGENT_ENGINE_ROOT=/opt/agents/nexgen engine"'
+
+    # Embedded double-quote and backslash must be C-escaped inside the quotes,
+    # not just wrapped, or the unit file itself becomes malformed.
+    escaped = mod._systemd_env_line("AGENT_VAULT_DATA", 'C:\\weird"path')
+    assert escaped == 'Environment="AGENT_VAULT_DATA=C:\\\\weird\\"path"'
+
+
+def test_systemd_service_content_emits_quoted_environment_lines(sandbox, monkeypatch):
+    """End-to-end: _systemd_service_content must route both overrides through
+    the quoting helper, not string-format them directly."""
+    mod = load_agent_sync_module(sandbox)
+    engine_root_with_space = sandbox.home / "engine root"
+    engine_root_with_space.mkdir()
+    vault_data_with_space = sandbox.home / "vault data"
+    vault_data_with_space.mkdir()
+    env = SimpleNamespace(
+        vault=sandbox.vault,
+        engine_root=engine_root_with_space,
+        vault_data=vault_data_with_space,
+    )
+
+    content = mod._systemd_service_content(env)
+
+    assert f'Environment="AGENT_ENGINE_ROOT={engine_root_with_space.resolve()}"' in content
+    assert f'Environment="AGENT_VAULT_DATA={vault_data_with_space.resolve()}"' in content
+    # No unquoted Environment= line should slip through for these two keys.
+    assert "Environment=AGENT_ENGINE_ROOT=" not in content
+    assert "Environment=AGENT_VAULT_DATA=" not in content

@@ -596,6 +596,8 @@ def data_migrations(env: Env) -> bool:
         # No marker yet: today's data shape already IS the target version,
         # there is nothing to migrate -- just stamp the baseline.
         current = TARGET_SCHEMA_VERSION
+        if _write_if_different(schema_file, f"{current}\n"):
+            env.log(f"data-migrations: stamped {schema_file} at v{current}")
 
     if current > TARGET_SCHEMA_VERSION:
         env.log(f"data-migrations: data schema v{current} is newer than this engine supports (v{TARGET_SCHEMA_VERSION}) -- leaving data untouched, upgrade the engine")
@@ -607,11 +609,15 @@ def data_migrations(env: Env) -> bool:
             env.log(f"data-migrations: no migration registered for v{current} -> v{current + 1}, stopping (data left at v{current})")
             return False
         touched = step(env)
-        env.log(f"data-migrations: applied v{current} -> v{current + 1}, touched {touched}")
+        # Stamped right after THIS step succeeds, not only once the whole
+        # chain reaches TARGET_SCHEMA_VERSION: a crash partway through a
+        # multi-step chain must not force a retry to redo an already-applied
+        # (and possibly non-idempotent) earlier step (finding 22).
         current += 1
+        if _write_if_different(schema_file, f"{current}\n"):
+            env.log(f"data-migrations: stamped {schema_file} at v{current}")
+        env.log(f"data-migrations: applied v{current - 1} -> v{current}, touched {touched}")
 
-    if _write_if_different(schema_file, f"{TARGET_SCHEMA_VERSION}\n"):
-        env.log(f"data-migrations: stamped {schema_file} at v{TARGET_SCHEMA_VERSION}")
     return True
 
 
@@ -879,6 +885,16 @@ def local_model_runtime(env: Env) -> None:
 # closes, per Fable's adapter list naming install_scheduler() as a normal
 # per-run step, not an opt-in one.
 
+def _systemd_env_line(key: str, value: str) -> str:
+    """Quotes the whole assignment per systemd.syntax(7): unquoted
+    Environment= values split on whitespace, so a path with a space (e.g.
+    '/opt/agents/nexgen engine') silently truncates the variable instead of
+    failing loud. Backslash and double-quote are C-escaped, matching
+    systemd's own quoted-string escaping."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'Environment="{key}={escaped}"'
+
+
 def _systemd_service_content(env: "Env") -> str:
     """Carries AGENT_ENGINE_ROOT/AGENT_VAULT_DATA into the recurring timer.
     The timer re-reads its unit file, not a shell environment, so a one-off
@@ -893,12 +909,12 @@ def _systemd_service_content(env: "Env") -> str:
              "", "[Service]", "Type=oneshot"]
     default_engine_root = (env.vault / "03-INFRA").resolve()
     if env.engine_root.resolve() != default_engine_root:
-        lines.append(f"Environment=AGENT_ENGINE_ROOT={env.engine_root}")
+        lines.append(_systemd_env_line("AGENT_ENGINE_ROOT", str(env.engine_root)))
     # env.vault_data (not the raw env var): a bare run with AGENT_VAULT_DATA
     # unset must not erase an already-persisted cutover the same way a bare
     # AGENT_ENGINE_ROOT-less run used to silently revert engine_root above.
     if env.vault_data.resolve() != env.vault.resolve():
-        lines.append(f"Environment=AGENT_VAULT_DATA={env.vault_data}")
+        lines.append(_systemd_env_line("AGENT_VAULT_DATA", str(env.vault_data)))
     lines.append("ExecStart=%h/.local/bin/agent-sync guard")
     return "\n".join(lines) + "\n"
 
