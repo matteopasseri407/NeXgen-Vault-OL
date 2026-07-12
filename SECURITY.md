@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Open a private security advisory on GitHub (Security tab of this repo) or email the address on the maintainer's GitHub profile. Do not open a public issue for anything that could expose a real credential or an active exploit path. A regular bug that doesn't touch secrets or code execution is fine as a normal issue.
+Open a private security advisory on GitHub (Security tab of this repo) or email the address on the maintainer's GitHub profile. (A security advisory is just a private draft report that only the maintainer can see until it's fixed, not a public post — GitHub's Security tab walks you through creating one, no special account setup beyond having a GitHub account.) Do not open a public issue for anything that could expose a real credential or an active exploit path. A regular bug that doesn't touch secrets or code execution is fine as a normal issue.
 
 ## What must never be committed
 
@@ -14,7 +14,7 @@ If you think you've already committed one of these, treat it as a leak: rotate t
 
 ## Trust boundaries
 
-- **The vault itself is a set of plain files.** Any agent CLI with filesystem access to it can read and write everything inside. There is no per-file access control beyond your OS permissions.
+- **The vault itself is a set of plain files.** Any agent CLI with filesystem access to it can read and write everything inside. There is no per-file access control beyond your OS permissions. If more than one person would share a Cloud-Server backend, see `docs/org-deployment.md` for what that means in practice.
 - **`agent-sync`/`agent-doctor` run with your user's permissions.** They read and patch CLI config files (see `docs/what-gets-written.md`) and, in MULTI profile, install a systemd user timer (Linux) or a Task Scheduler entry (Windows). They do not use sudo/admin elevation and do not touch files outside your home directory except through the paths documented there.
 - **MCP servers run as local processes or connect to your own VPS.** None of the tools in the default manifest send vault content to a third-party model or SaaS API as part of normal operation; the semantic search, OCR, and scraping services are self-hosted by you, on infrastructure you deploy and own (see `03-INFRA/deploy/`), not a service this project or its author runs for you. If you add a hosted MCP server yourself, that server's own privacy and security posture applies.
 - **The browser MCP attaches to a real, visible Chrome window over the DevTools protocol.** Agents are expected to never launch a headless browser behind your back; if you see one, that's a bug, not a feature.
