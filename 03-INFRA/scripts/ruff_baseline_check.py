@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -42,8 +43,16 @@ DEFAULT_BASELINE = TARGET_DIR / "ruff-baseline.json"
 
 
 def run_ruff() -> list[dict]:
+    # RUFF_CMD (a JSON array, not a shell string -- no quoting ambiguity
+    # across POSIX/Windows path separators) lets tests point this at a fake
+    # ruff, e.g. [sys.executable, "/path/to/stub.py"], without touching
+    # PATH: a bare "ruff" name on Windows resolves only to "ruff.exe" via
+    # CreateProcess, so a POSIX shebang stub named plain "ruff" is invisible
+    # there even when it's on PATH and executable. Real usage (CI, local)
+    # never sets this, and gets the real `ruff` from PATH as before.
+    ruff_cmd = json.loads(os.environ["RUFF_CMD"]) if "RUFF_CMD" in os.environ else ["ruff"]
     proc = subprocess.run(
-        ["ruff", "check", TARGET_NAME, "--output-format=json"],
+        [*ruff_cmd, "check", TARGET_NAME, "--output-format=json"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,

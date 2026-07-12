@@ -10,10 +10,12 @@ registry access), so compose validity is checked with PyYAML rather than
 """
 from __future__ import annotations
 
+import os
 import re
 import stat
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -114,6 +116,7 @@ def test_bootstrap_vps_has_a_bash_shebang():
     assert first_line == "#!/usr/bin/env bash", f"unexpected shebang line: {first_line!r}"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable bits are not the Windows permission model.")
 def test_bootstrap_vps_is_executable():
     mode = BOOTSTRAP.stat().st_mode
     assert mode & stat.S_IXUSR, "bootstrap-vps.sh must be executable"

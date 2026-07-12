@@ -3,16 +3,19 @@
 `ruff check 03-INFRA` has 52 pre-existing findings that must not fail every
 future PR (the bug this mechanism guards against), while a genuinely NEW or
 INCREASED finding must still fail CI (the correction). These tests exercise
-03-INFRA/scripts/ruff_baseline_check.py against a fake `ruff` executable on
-PATH -- no real ruff binary required, since engine-tests does not install
-one and this suite must stay runnable there too.
+03-INFRA/scripts/ruff_baseline_check.py against a fake `ruff` -- a plain
+Python script invoked through the RUFF_CMD env var override, not installed
+on PATH under the bare name "ruff": on Windows, CreateProcess resolves an
+extension-less name only to "ruff.exe", so a PATH-based POSIX shebang stub
+is invisible there even when it's executable (verified live in CI,
+2026-07-12). No real ruff binary required either way, since engine-tests
+does not install one and this suite must stay runnable there too.
 """
 from __future__ import annotations
 
 import json
 import os
 import shutil
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -42,20 +45,20 @@ def _finding(abs_filename: str, code: str, row: int = 1) -> dict:
     }
 
 
-def _write_ruff_stub(bin_dir: Path, findings: list[dict]) -> None:
-    """Installs a fake `ruff` on PATH that ignores argv and prints canned
-    JSON, exiting 1 if findings is non-empty and 0 otherwise (mirrors real
-    ruff's exit codes, which the script under test relies on)."""
+def _write_ruff_stub(bin_dir: Path, findings: list[dict]) -> Path:
+    """Writes a fake `ruff` that ignores argv and prints canned JSON,
+    exiting 1 if findings is non-empty and 0 otherwise (mirrors real ruff's
+    exit codes, which the script under test relies on). Returns the stub's
+    path -- run via `python <stub>` through RUFF_CMD (see _run), not PATH."""
     payload = json.dumps(findings)
     exit_code = 1 if findings else 0
-    stub = bin_dir / "ruff"
+    stub = bin_dir / "ruff_stub.py"
     stub.write_text(
-        "#!/usr/bin/env python3\n"
         "import sys\n"
         f"sys.stdout.write({payload!r})\n"
         f"sys.exit({exit_code})\n"
     )
-    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    return stub
 
 
 def _make_repo(tmp_path: Path) -> Path:
@@ -69,9 +72,9 @@ def _make_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _run(repo: Path, bin_dir: Path, *args: str) -> subprocess.CompletedProcess:
+def _run(repo: Path, ruff_stub: Path, *args: str) -> subprocess.CompletedProcess:
     env = os.environ.copy()
-    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["RUFF_CMD"] = json.dumps([sys.executable, str(ruff_stub)])
     return subprocess.run(
         [sys.executable, str(repo / "03-INFRA" / "scripts" / "ruff_baseline_check.py"), *args],
         cwd=repo,
@@ -96,7 +99,7 @@ def bin_dir(tmp_path):
 
 def test_generate_writes_relative_paths_grouped_with_counts(repo, bin_dir):
     abs_file = repo / "03-INFRA" / "widget.py"
-    _write_ruff_stub(
+    ruff_stub = _write_ruff_stub(
         bin_dir,
         [
             _finding(str(abs_file), "E401"),
@@ -106,7 +109,7 @@ def test_generate_writes_relative_paths_grouped_with_counts(repo, bin_dir):
     )
 
     baseline_path = repo / "03-INFRA" / "ruff-baseline.json"
-    proc = _run(repo, bin_dir, "--generate", "--baseline", str(baseline_path))
+    proc = _run(repo, ruff_stub, "--generate", "--baseline", str(baseline_path))
     assert proc.returncode == 0, proc.stderr
 
     rows = json.loads(baseline_path.read_text())
@@ -122,8 +125,8 @@ def test_passes_when_current_matches_baseline(repo, bin_dir):
     baseline_path = repo / "03-INFRA" / "ruff-baseline.json"
     baseline_path.write_text(json.dumps([{"file": "03-INFRA/widget.py", "code": "E401", "count": 1}]))
 
-    _write_ruff_stub(bin_dir, [_finding(str(abs_file), "E401")])
-    proc = _run(repo, bin_dir, "--baseline", str(baseline_path))
+    ruff_stub = _write_ruff_stub(bin_dir, [_finding(str(abs_file), "E401")])
+    proc = _run(repo, ruff_stub, "--baseline", str(baseline_path))
     assert proc.returncode == 0, proc.stderr
     assert "no regressions" in proc.stdout
 
@@ -135,8 +138,8 @@ def test_fails_on_new_finding_not_in_baseline(repo, bin_dir):
     baseline_path = repo / "03-INFRA" / "ruff-baseline.json"
     baseline_path.write_text(json.dumps([]))
 
-    _write_ruff_stub(bin_dir, [_finding(str(abs_file), "E401")])
-    proc = _run(repo, bin_dir, "--baseline", str(baseline_path))
+    ruff_stub = _write_ruff_stub(bin_dir, [_finding(str(abs_file), "E401")])
+    proc = _run(repo, ruff_stub, "--baseline", str(baseline_path))
     assert proc.returncode == 1
     assert "03-INFRA/widget.py" in proc.stdout
     assert "E401" in proc.stdout
@@ -148,8 +151,8 @@ def test_fails_when_existing_finding_count_increases(repo, bin_dir):
     baseline_path = repo / "03-INFRA" / "ruff-baseline.json"
     baseline_path.write_text(json.dumps([{"file": "03-INFRA/widget.py", "code": "E401", "count": 1}]))
 
-    _write_ruff_stub(bin_dir, [_finding(str(abs_file), "E401"), _finding(str(abs_file), "E401")])
-    proc = _run(repo, bin_dir, "--baseline", str(baseline_path))
+    ruff_stub = _write_ruff_stub(bin_dir, [_finding(str(abs_file), "E401"), _finding(str(abs_file), "E401")])
+    proc = _run(repo, ruff_stub, "--baseline", str(baseline_path))
     assert proc.returncode == 1
     assert "baseline allows 1" in proc.stdout
 
@@ -161,8 +164,8 @@ def test_passes_when_existing_finding_count_decreases(repo, bin_dir):
     baseline_path = repo / "03-INFRA" / "ruff-baseline.json"
     baseline_path.write_text(json.dumps([{"file": "03-INFRA/widget.py", "code": "E401", "count": 3}]))
 
-    _write_ruff_stub(bin_dir, [_finding(str(abs_file), "E401")])
-    proc = _run(repo, bin_dir, "--baseline", str(baseline_path))
+    ruff_stub = _write_ruff_stub(bin_dir, [_finding(str(abs_file), "E401")])
+    proc = _run(repo, ruff_stub, "--baseline", str(baseline_path))
     assert proc.returncode == 0, proc.stderr
     assert "improved" in proc.stdout
 
@@ -174,6 +177,6 @@ def test_missing_baseline_file_is_treated_as_empty(repo, bin_dir):
     baseline_path = repo / "03-INFRA" / "ruff-baseline.json"
     assert not baseline_path.exists()
 
-    _write_ruff_stub(bin_dir, [_finding(str(abs_file), "E401")])
-    proc = _run(repo, bin_dir, "--baseline", str(baseline_path))
+    ruff_stub = _write_ruff_stub(bin_dir, [_finding(str(abs_file), "E401")])
+    proc = _run(repo, ruff_stub, "--baseline", str(baseline_path))
     assert proc.returncode == 1
