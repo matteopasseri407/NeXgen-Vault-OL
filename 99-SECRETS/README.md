@@ -10,7 +10,10 @@ Never commit plaintext secrets.
   secret *values* (passwords, API keys, tokens, SSH keys, webhook secrets,
   tunnel credentials), GPG-encrypted with a passphrase only you know. Created on
   your first secret. Git-ignored: it never leaves the machine unless you
-  deliberately back it up.
+  deliberately back it up. **If you forget that passphrase, everything in this
+  archive is gone permanently — there is no recovery.** Keep it in a password
+  manager, or write down the passphrase itself (never the plaintext secrets)
+  somewhere durable and separate from this machine.
 - **`secrets-registry.md`** — the non-sensitive index. Lists *which* secrets
   exist: name, provider, the env var they map to, scope, last-rotated date.
   **Never any values.** Tracked in git so the map stays in sync across machines.
