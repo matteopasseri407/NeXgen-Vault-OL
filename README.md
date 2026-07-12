@@ -1,6 +1,6 @@
 # NeXgen Engine (Alpha)
 
-A Git-backed AgentOps control layer for AI coding CLIs. Note: This project is currently in Alpha.
+A Git-backed AgentOps control layer for AI coding CLIs — in plain terms, a shared rulebook and memory for AI agent tools like Claude Code, useful for non-coding work (notes, research, career docs) just as much as for software projects. Note: This project is currently in Alpha.
 
 Shared instructions, generated MCP config, drift checks, secrets discipline, and cross-machine agent memory, all as plain files in a Git repo, not a hosted service.
 
@@ -148,7 +148,7 @@ This project is free to use. Some optional links (like the OpenCode one above) a
 
 # NeXgen Engine (Italiano) - Alpha
 
-Un control layer AgentOps basato su Git, per le CLI agentiche di sviluppo. Nota: Questo progetto è attualmente in fase Alpha.
+Un control layer AgentOps basato su Git, per le CLI agentiche di sviluppo — in parole povere, un regolamento condiviso e una memoria per tool AI agentici come Claude Code, utile tanto per lavori non di programmazione (note, ricerca, documenti di carriera) quanto per progetti software. Nota: Questo progetto è attualmente in fase Alpha.
 
 Istruzioni condivise, configurazione MCP generata automaticamente, controlli anti-drift, disciplina sui segreti e memoria degli agenti condivisa tra più macchine.
 Tutto file di testo dentro un repo Git, non un servizio in cloud.
