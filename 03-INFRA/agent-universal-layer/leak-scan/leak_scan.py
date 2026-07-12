@@ -87,6 +87,46 @@ def redact(tok: str) -> str:
     return f"{tok[:2]}…{tok[-2:]} ({len(tok)} chars)"
 
 
+def _allowlisted(tok: str, allow_re: list[re.Pattern[str]]) -> bool:
+    """True only if an allow pattern accounts for the WHOLE flagged token.
+
+    Bug fixed here (leak-scan audit finding 29): the old check was
+    `any(a.search(tok) for a in allow_re)`, which asks "does an allow
+    pattern appear ANYWHERE inside the matched token" rather than "does an
+    allow pattern explain the ENTIRE token". A value that merely *contains*
+    an allowlisted value as a substring used to be waved through with it,
+    even though it is a different, unreviewed value. Concretely (see
+    tests/test_leak_scan.py for worked examples, deliberately not spelled
+    out here in a shape this same scanner would itself flag):
+      - the allowlisted wildcard IPv4 address is a literal substring of
+        other, real addresses that merely share its trailing octets;
+      - the allowlisted generic commit-trailer address is a literal
+        substring of a real address with something else concatenated onto
+        its local part.
+    Both used to clear their whole (single-token) match via `.search()`
+    and vanish from the findings entirely -- "the whole line passes with
+    no signal" is just what that looks like when the token that got
+    wrongly cleared was the only evidence on that line.
+
+    `fullmatch` requires the allow pattern to cover the *entire* span the
+    hard/soft pattern actually flagged (m.start()..m.end(), i.e. the real
+    context the match was found in) instead of letting `.search()` accept
+    any shorter fragment inside it.
+
+    Deliberately NOT implemented as `a.search(u.text, m.start(), m.end())`
+    against the full line text: Python's `^`/`$` anchors (used by two
+    allow entries -- the OCR body-size constant and git's null SHA) only
+    match the real start/end of the given string, never an arbitrary
+    `pos`/`endpos` offset into a longer one. Running them against a sliced
+    position in u.text would silently stop those two entries from ever
+    matching except when the flagged value sits at column 0. Matching
+    against the isolated token keeps `^`/`$` meaning what their authors
+    intended ("this value stands alone") while still checking the true
+    extent of what was flagged, not a `.search()`-shortened fragment of it.
+    """
+    return any(a.fullmatch(tok) for a in allow_re)
+
+
 def scan_units(units: Iterable[Unit], patterns: list[tuple[str, str, bool]], allow: list[str],
                denylist: list[str]) -> list[Finding]:
     allow_re = [re.compile(a) for a in allow]
@@ -96,7 +136,7 @@ def scan_units(units: Iterable[Unit], patterns: list[tuple[str, str, bool]], all
         for name, rx, blocking in pat_re:
             for m in rx.finditer(u.text):
                 tok = m.group(0)
-                if any(a.search(tok) for a in allow_re):
+                if _allowlisted(tok, allow_re):
                     continue
                 findings.append(Finding(u.label, u.lineno, f"pattern:{name}", redact(tok), blocking))
         for lit in denylist:
