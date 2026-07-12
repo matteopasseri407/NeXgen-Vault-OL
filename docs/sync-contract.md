@@ -91,3 +91,16 @@ The Linux and Windows launchers call the same Python implementation. Automated
 tests cover both path dialects and Windows lock code, but an architecture
 change is not operationally complete until it has also been exercised on a
 physical Windows installation.
+
+## Known limitation
+
+This whole contract is built for one person keeping several machines of
+their own in sync, not for a team writing to one shared vault at the same
+time. The lock described above is host-wide: it serializes the machines of
+a single owner, and it does nothing to arbitrate commits arriving from
+30-40 different people's machines against the same vault. If a team shares
+one vault as common infrastructure (see `docs/team.md` for why that's
+already a mono-user fit problem before sync even enters the picture),
+concurrent writes from multiple people are not a tested or supported
+scenario today: expect ordinary Git merge conflicts with no additional
+tooling in this contract to resolve them.
