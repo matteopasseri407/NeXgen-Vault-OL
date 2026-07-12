@@ -5,15 +5,23 @@ on:
     branches: [main]
   pull_request:
 
+# Default to read-only GITHUB_TOKEN permissions for every job in this
+# workflow (least privilege - none of the jobs below push commits, open
+# PRs/issues, or publish releases/packages, so read access to repo
+# contents is all any of them need). Add a job-level `permissions:`
+# override only if a specific job later needs more.
+permissions:
+  contents: read
+
 jobs:
   self-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.x"
 
@@ -94,9 +102,9 @@ jobs:
     # after intentionally fixing or accepting findings.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.x"
 
@@ -113,7 +121,7 @@ jobs:
   shellcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: ShellCheck all shell scripts
         # Same discovery pattern as the "Shell syntax check" step in
@@ -124,9 +132,9 @@ jobs:
   dependency-audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.x"
 
@@ -159,7 +167,7 @@ jobs:
   compose-validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Validate Docker Compose files
         # `docker compose config` only parses/merges/validates the model
@@ -192,7 +200,7 @@ jobs:
     # stays the only job that runs anything on Windows.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: PowerShell version
         # ubuntu-latest GitHub-hosted runners ship PowerShell Core (pwsh)
@@ -232,9 +240,9 @@ jobs:
     # tests/run.sh, which is a thin Fedora-only convenience wrapper).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.x"
 
@@ -251,9 +259,9 @@ jobs:
     # value is the direct agent_sync.py guard smoke in a sandboxed USERPROFILE.
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.x"
 
