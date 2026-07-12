@@ -151,7 +151,10 @@ cmd_rollback() {
   local compose_file
   compose_file="$(compose_file_for "$stack")"
   echo "==> rolling back $stack: $image_var=$previous_ref"
-  env "${image_var}=${previous_ref}" docker compose -f "$compose_file" up -d
+  # --env-file required: see the matching comment in bootstrap-vps.sh, same
+  # bug (compose's default .env lookup is relative to $compose_file's own
+  # directory, not DEPLOY_DIR).
+  env "${image_var}=${previous_ref}" docker compose -f "$compose_file" --env-file "$DEPLOY_DIR/.env" up -d
   echo "==> rollback deployed. Verify health, then decide whether to also update"
   echo "    the default pin in $compose_file so it survives a fresh checkout"
   echo "    (env overrides only apply to this invocation)."

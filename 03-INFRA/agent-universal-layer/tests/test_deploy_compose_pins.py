@@ -139,3 +139,35 @@ def test_bootstrap_vps_uses_compose_v2_not_legacy():
     assert re.search(r"n8n/docker-compose\.yml", content)
     assert re.search(r"firecrawl/docker-compose\.yml", content)
     assert re.search(r"ocr/docker-compose\.yml", content)
+
+
+def test_bootstrap_vps_passes_env_file_to_every_stack():
+    """Regression, confirmed live on the real VPS 2026-07-12: docker
+    compose's default .env lookup is relative to the directory of the
+    FIRST -f file (e.g. n8n/), not this script's cwd. A bare
+    `docker compose -f n8n/docker-compose.yml up` silently ignores the
+    .env sitting next to this script and every ${VAR} falls back to its
+    compose-file default -- dropping secrets with no error at all.
+    --env-file must be passed explicitly on every `docker compose -f`
+    invocation that brings a stack up."""
+    up_invocations = [
+        line for line in BOOTSTRAP.read_text(encoding="utf-8").splitlines()
+        if re.search(r"docker compose -f \S+\.yml", line) and re.search(r"\bup\b", line)
+        and not line.strip().startswith(("#", "echo"))
+    ]
+    assert up_invocations, "expected at least one real `docker compose -f ... up` invocation"
+    for line in up_invocations:
+        assert "--env-file" in line, f"missing --env-file: {line!r}"
+
+
+def test_backup_restore_rollback_passes_env_file():
+    """Same bug, same fix, in the rollback path of backup-restore.sh."""
+    content = (DEPLOY / "backup-restore.sh").read_text(encoding="utf-8")
+    rollback_invocations = [
+        line for line in content.splitlines()
+        if re.search(r"docker compose -f \S", line) and re.search(r"\bup\b", line)
+        and not line.strip().startswith(("#", "echo"))
+    ]
+    assert rollback_invocations, "expected a real `docker compose -f ... up` in the rollback path"
+    for line in rollback_invocations:
+        assert "--env-file" in line, f"missing --env-file: {line!r}"

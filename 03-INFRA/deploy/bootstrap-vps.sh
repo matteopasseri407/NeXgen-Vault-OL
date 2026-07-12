@@ -34,14 +34,22 @@ docker compose version >/dev/null 2>&1 || {
   exit 1
 }
 
+# --env-file .env is explicit and REQUIRED here, not cosmetic: docker
+# compose's default .env lookup is relative to the directory of the first
+# -f file (e.g. n8n/), not this script's cwd, so a bare `-f n8n/docker-
+# compose.yml` silently ignores the .env created at DEPLOY_DIR above and
+# every ${VAR} falls back to its compose-file default (often empty),
+# dropping secrets without any error. Confirmed live with `docker compose
+# ... config`, 2026-07-12: OPENAI_API_KEY resolved to the empty fallback
+# without --env-file, and correctly from .env with it.
 echo "==> n8n"
-docker compose -f n8n/docker-compose.yml up -d --build
+docker compose -f n8n/docker-compose.yml --env-file .env up -d --build
 
 echo "==> Firecrawl"
-docker compose -f firecrawl/docker-compose.yml up -d --build
+docker compose -f firecrawl/docker-compose.yml --env-file .env up -d --build
 
 echo "==> Vault OCR"
-docker compose -f ocr/docker-compose.yml up -d --build
+docker compose -f ocr/docker-compose.yml --env-file .env up -d --build
 
 echo
 echo "Stacks up. Health checks:"
