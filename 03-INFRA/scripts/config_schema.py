@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import yaml
@@ -19,7 +19,8 @@ import yaml
 MCP_SCHEMA_VERSION = 1
 COUNCIL_SCHEMA_VERSION = 1
 MCP_TARGETS = frozenset({"claude", "codex", "antigravity", "opencode"})
-COUNCIL_CLIS = frozenset({"opencode", "agy", "codex"})
+COUNCIL_CLIS = frozenset({"opencode", "agy", "codex", "claude", "ollama"})
+COUNCIL_REASONING_EFFORTS = frozenset({"none", "low", "medium", "high", "xhigh", "max"})
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 ENTRY_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -87,6 +88,29 @@ def _string_list(value: Any, source: str | Path, where: str, *, allow_empty: boo
     if not allow_empty and not value:
         _error(source, f"{where} must not be empty")
     return value
+
+
+def _routing_config(value: Any, source: str | Path) -> None:
+    routing = _mapping(value, source, "Council routing config")
+    _reject_unknown_keys(routing, {"enabled", "decision_file", "mode_defaults", "relay_roles"}, source, "Council routing config")
+    if type(routing.get("enabled")) is not bool:
+        _error(source, "Council routing config.enabled must be true or false")
+    if routing["enabled"]:
+        decision_file = _nonempty_string(routing.get("decision_file"), source, "Council routing config.decision_file")
+        path = PurePosixPath(decision_file)
+        windows_path = PureWindowsPath(decision_file)
+        if path.is_absolute() or windows_path.is_absolute() or "\\" in decision_file or ".." in path.parts:
+            _error(source, "Council routing config.decision_file must be a relative Vault path without '..'")
+    elif "decision_file" in routing:
+        _nonempty_string(routing["decision_file"], source, "Council routing config.decision_file")
+    if "mode_defaults" in routing:
+        defaults = _mapping(routing["mode_defaults"], source, "Council routing config.mode_defaults")
+        allowed_modes = {"brainstorm", "challenge", "code-review"}
+        _reject_unknown_keys(defaults, allowed_modes, source, "Council routing config.mode_defaults")
+        for mode, role in defaults.items():
+            _nonempty_string(role, source, f"Council routing config.mode_defaults.{mode}")
+    if "relay_roles" in routing:
+        _string_list(routing["relay_roles"], source, "Council routing config.relay_roles", allow_empty=False)
 
 
 def _env_mapping(value: Any, source: str | Path, where: str) -> dict[str, str]:
@@ -248,7 +272,7 @@ def _validate_sequence(value: Any, source: str | Path, where: str) -> list[str]:
 
 def validate_council_config(data: Any, source: str | Path) -> dict[str, Any]:
     config = _mapping(data, source, "Council seats config")
-    _reject_unknown_keys(config, {"schema_version", "seats", "sequence", "sequences"}, source, "Council seats config")
+    _reject_unknown_keys(config, {"schema_version", "seats", "sequence", "sequences", "routing"}, source, "Council seats config")
     if type(config.get("schema_version")) is not int or config["schema_version"] != COUNCIL_SCHEMA_VERSION:
         _error(source, f"Council seats config schema_version must be {COUNCIL_SCHEMA_VERSION}")
     seats = _mapping(config.get("seats"), source, "Council seats config.seats")
@@ -258,7 +282,10 @@ def validate_council_config(data: Any, source: str | Path) -> dict[str, Any]:
         spec = _mapping(seat, source, f"Council seat '{name}'")
         _reject_unknown_keys(
             spec,
-            {"vendor", "cli", "model", "quota_pool", "timeout_seconds", "zero_retention"},
+            {
+                "vendor", "cli", "model", "quota_pool", "timeout_seconds", "zero_retention",
+                "routing_id", "routing_label", "reasoning_effort",
+            },
             source,
             f"Council seat '{name}'",
         )
@@ -273,6 +300,20 @@ def validate_council_config(data: Any, source: str | Path) -> dict[str, Any]:
             _nonempty_string(spec["quota_pool"], source, f"Council seat '{name}'.quota_pool")
         if "timeout_seconds" in spec:
             _positive_number(spec["timeout_seconds"], source, f"Council seat '{name}'.timeout_seconds")
+        if "routing_id" in spec:
+            _nonempty_string(spec["routing_id"], source, f"Council seat '{name}'.routing_id")
+        if "routing_label" in spec:
+            _nonempty_string(spec["routing_label"], source, f"Council seat '{name}'.routing_label")
+        if "reasoning_effort" in spec:
+            effort = _nonempty_string(spec["reasoning_effort"], source, f"Council seat '{name}'.reasoning_effort")
+            if effort not in COUNCIL_REASONING_EFFORTS:
+                _error(
+                    source,
+                    f"Council seat '{name}'.reasoning_effort must be one of: {', '.join(sorted(COUNCIL_REASONING_EFFORTS))}",
+                )
+
+    if "routing" in config:
+        _routing_config(config["routing"], source)
 
     references: list[str] = []
     if "sequence" in config:

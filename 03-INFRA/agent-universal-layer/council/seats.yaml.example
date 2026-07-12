@@ -26,8 +26,11 @@
 # Schema di ogni seat:
 #   <nome-seat>:
 #     vendor: <vendor del modello, es. openai/anthropic/deepseek/zhipu/...>
-#     cli: <CLI locale che lo invoca in headless, es. opencode/agy/codex>
+#     cli: <CLI locale che lo invoca in headless, es. opencode/agy/codex/claude/ollama>
 #     model: <identificatore modello nel formato atteso dalla CLI>
+#     routing_id: <id canonico nel documento di decisione>       # opzionale
+#     routing_label: <nome umano esatto nel documento di decisione> # opzionale
+#     reasoning_effort: low|medium|high|xhigh|max|none           # opzionale
 #     quota_pool: <pool reale condiviso, es. opencode-go>  # opzionale ma consigliato
 #     timeout_seconds: 300  # opzionale, default conservativo: 300 secondi
 #     zero_retention: true|false   # garanzia contrattuale di non-training,
@@ -50,6 +53,24 @@
 #       seat: seat-c
 #     - role: reviewer
 #       seat: seat-d
+#
+# Routing automatico da un documento privato di decisione:
+# - se attivo, Council legge soltanto il documento dichiarato nel Vault e risolve il
+#   modello concreto qui dichiarato; un workflow esterno non riscrive mai questo file;
+# - ogni seat auto-routable deve avere routing_id e/o routing_label, oltre a
+#   model ed effort esatti per la sua CLI;
+# - la CLI viene interrogata in sola lettura quando espone un inventario
+#   locale. Se il modello non è verificabile, manca o viola zero_retention,
+#   Council passa al fallback dichiarato o si ferma, senza inventarne uno.
+#
+# routing:
+#   enabled: true
+#   decision_file: path/privato/routing.md
+#   mode_defaults:
+#     brainstorm: L-Arch
+#     challenge: L-Arch
+#     code-review: L-Code
+#   relay_roles: [L-Arch, L-Build, L-Code]
 
 # Campo root obbligatorio, aggiornalo solo con una migrazione documentata.
 schema_version: 1

@@ -337,7 +337,7 @@ def test_relay_enforces_hard_five_stage_limit(monkeypatch, tmp_path):
     assert "relay supporta al massimo 5 stadi" in str(exc.value)
 
 
-@pytest.mark.parametrize("cli", ["opencode", "agy", "codex"])
+@pytest.mark.parametrize("cli", ["opencode", "agy", "codex", "claude", "ollama"])
 def test_large_prompt_uses_private_non_argv_transport_for_every_cli(monkeypatch, tmp_path, cli):
     # This parametrization runs in the Linux and Windows CI jobs.  Keep the
     # host's real ``os.name`` so the private-file path exercises its native

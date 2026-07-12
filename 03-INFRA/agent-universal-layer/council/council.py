@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 VERDICT_RE = re.compile(r"(?i)verdict\s*:\s*(APPROVE|REVISE|REJECT)\b")
-SUPPORTED_CLIS = ("opencode", "agy", "codex")
+SUPPORTED_CLIS = ("opencode", "agy", "codex", "claude", "ollama")
 
 # Council may validate a data-root file directly. That read-only check must
 # not leave Python cache files next to the user's data on an error path.
@@ -35,7 +35,15 @@ ENGINE_ROOT = Path(__file__).resolve().parent
 SCRIPTS_DIR = ENGINE_ROOT.parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+if str(ENGINE_ROOT) not in sys.path:
+    sys.path.insert(0, str(ENGINE_ROOT))
 from config_schema import ConfigValidationError, load_council_config  # noqa: E402
+from routing import (  # noqa: E402
+    RoutingContractError,
+    load_routing_plan,
+    resolve_role_candidates,
+    seat_capabilities,
+)
 
 LEAK_SCAN_DIR = ENGINE_ROOT.parent / "leak-scan"
 SESSIONS_DIR = Path.home() / ".local" / "state" / "council" / "sessions"
@@ -95,6 +103,14 @@ def _vault_data_root() -> Path:
 
 
 SEATS_PATH = _vault_data_root() / "03-INFRA" / "agent-universal-layer" / "council" / "seats.yaml"
+
+
+def _routing_document_path(config: dict) -> Path:
+    routing = config.get("routing") or {}
+    decision_file = routing.get("decision_file")
+    if not isinstance(decision_file, str) or not decision_file:
+        sys.exit("[council] routing automatico fermo: decision_file non configurato nel piano dati.")
+    return _vault_data_root() / Path(decision_file)
 
 
 def _load_leak_scan():
@@ -161,6 +177,43 @@ def load_seats() -> dict:
     return seats
 
 
+def _routing_enabled(config: dict) -> bool:
+    return bool((config.get("routing") or {}).get("enabled", False))
+
+
+def _routing_context_or_exit(config: dict):
+    try:
+        return load_routing_plan(_routing_document_path(config))
+    except RoutingContractError as exc:
+        sys.exit(f"[council] routing automatico fermo: {exc}.")
+
+
+def _routing_candidates_or_exit(
+    plan, seats: dict, capabilities: dict, role: str, *, allow_training_risk: bool,
+) -> list[str]:
+    try:
+        candidates, diagnostics = resolve_role_candidates(
+            plan, seats, capabilities, role, allow_training_risk=allow_training_risk,
+        )
+    except RoutingContractError as exc:
+        sys.exit(f"[council] routing automatico fermo: {exc}.")
+    if candidates:
+        return candidates
+    detail = "; ".join(diagnostics[:4]) or "nessun seat locale compatibile"
+    risk_hint = " Usa --allow-training-risk solo per un test tecnico non sensibile." if not allow_training_risk else ""
+    sys.exit(f"[council] routing automatico fermo per il ruolo '{role}': {detail}.{risk_hint}")
+
+
+def _resolve_routing_seat(args: argparse.Namespace, config: dict, seats: dict, role: str) -> str:
+    plan = _routing_context_or_exit(config)
+    capabilities = seat_capabilities(seats)
+    candidates = _routing_candidates_or_exit(
+        plan, seats, capabilities, role,
+        allow_training_risk=bool(getattr(args, "allow_training_risk", False)),
+    )
+    return candidates[0]
+
+
 def _seat_quota_pool(seat: dict) -> str:
     if seat.get("quota_pool"):
         return str(seat["quota_pool"])
@@ -170,9 +223,28 @@ def _seat_quota_pool(seat: dict) -> str:
     return f"{seat.get('cli', 'unknown')}:{model_prefix}"
 
 
-def resolve_seat(args: argparse.Namespace) -> tuple[str, dict]:
-    seats = load_seats()
-    seat_name = args.seat or next(iter(seats))
+def resolve_seat(args: argparse.Namespace, *, default_routing_role: str | None = None) -> tuple[str, dict]:
+    config = load_config()
+    seats = config["seats"]
+    if not seats:
+        sys.exit(f"[council] {SEATS_PATH} è vuoto: espansione inerte, niente da fare.")
+    seat_name = getattr(args, "seat", None)
+    if not seat_name:
+        mode_defaults = ((config.get("routing") or {}).get("mode_defaults") or {})
+        requested_role = (
+            getattr(args, "routing_role", None)
+            or mode_defaults.get(getattr(args, "mode", None))
+            or default_routing_role
+        )
+        if _routing_enabled(config):
+            if not requested_role:
+                sys.exit(
+                    "[council] routing automatico attivo ma senza ruolo: "
+                    "configura routing.mode_defaults o passa --routing-role."
+                )
+            seat_name = _resolve_routing_seat(args, config, seats, requested_role)
+        else:
+            seat_name = next(iter(seats))
     if seat_name not in seats:
         sys.exit(f"[council] seat sconosciuto: {seat_name}. Disponibili: {', '.join(seats)}")
     seat = seats[seat_name]
@@ -201,11 +273,8 @@ def _validate_relay_seat(seat_name: str, seats: dict, args: argparse.Namespace) 
     if seat_name not in seats:
         sys.exit(f"[council] seat sconosciuto nella sequence relay: {seat_name}. Disponibili: {', '.join(seats)}")
     seat = seats[seat_name]
-    if seat.get("cli") != "opencode":
-        sys.exit(
-            f"[council] relay supporta per ora solo seat con cli: opencode. "
-            f"'{seat_name}' usa cli: {seat.get('cli')}."
-        )
+    if seat.get("cli") not in SUPPORTED_CLIS:
+        sys.exit(f"[council] cli non supportata nella sequence relay: {seat.get('cli')}.")
     return seat
 
 
@@ -261,6 +330,26 @@ def _relay_stage_from_yaml(item) -> RelayStage:
     return RelayStage(role=role, candidates=_dedupe_keep_order(candidates))
 
 
+def _automatic_relay_sequence(args: argparse.Namespace, config: dict, seats: dict) -> list[RelayStage]:
+    routing = config.get("routing") or {}
+    roles = routing.get("relay_roles") or []
+    if not roles:
+        sys.exit(
+            "[council] routing automatico attivo ma senza routing.relay_roles: "
+            "passa --sequence oppure completa il piano dati."
+        )
+    plan = _routing_context_or_exit(config)
+    capabilities = seat_capabilities(seats)
+    stages: list[RelayStage] = []
+    for role in roles:
+        candidates = _routing_candidates_or_exit(
+            plan, seats, capabilities, str(role),
+            allow_training_risk=bool(getattr(args, "allow_training_risk", False)),
+        )
+        stages.append(RelayStage(role=str(role), candidates=candidates))
+    return stages
+
+
 def _load_relay_sequence(args: argparse.Namespace, config: dict, seats: dict) -> list[RelayStage]:
     spec = args.sequence
     if spec and ("=" in spec or "," in spec):
@@ -275,8 +364,12 @@ def _load_relay_sequence(args: argparse.Namespace, config: dict, seats: dict) ->
         if configured is None:
             configured = (config.get("sequences") or {}).get("default")
         if configured is None:
-            sys.exit("[council] relay richiede --sequence role=seat|fallback,... oppure una sequence/default in seats.yaml.")
-        stages = [_relay_stage_from_yaml(item) for item in configured]
+            if _routing_enabled(config):
+                stages = _automatic_relay_sequence(args, config, seats)
+            else:
+                sys.exit("[council] relay richiede --sequence role=seat|fallback,... oppure una sequence/default in seats.yaml.")
+        else:
+            stages = [_relay_stage_from_yaml(item) for item in configured]
 
     if not stages:
         sys.exit("[council] sequence relay vuota.")
@@ -420,9 +513,21 @@ def _opencode_model_costs() -> dict[str, float]:
 
 
 def _sort_candidates_by_usage(candidates: list[str], seats: dict, model_costs: dict[str, float]) -> list[str]:
-    indexed = list(enumerate(candidates))
-    indexed.sort(key=lambda item: (model_costs.get(seats[item[1]]["model"], 0.0), item[0]))
-    return [name for _, name in indexed]
+    """Apply the OpenCode spend hint only within OpenCode candidate positions.
+
+    The routing-document order remains the cross-provider policy.  A model with no
+    OpenCode telemetry must not jump ahead of it merely because its synthetic
+    cost would otherwise be zero.
+    """
+    opencode_positions = [index for index, name in enumerate(candidates) if seats[name].get("cli") == "opencode"]
+    ordered_opencode = sorted(
+        ((index, candidates[index]) for index in opencode_positions),
+        key=lambda item: (model_costs.get(seats[item[1]]["model"], 0.0), item[0]),
+    )
+    resolved = list(candidates)
+    for index, (_, name) in zip(opencode_positions, ordered_opencode):
+        resolved[index] = name
+    return resolved
 
 
 class RelayQuarantine:
@@ -666,6 +771,15 @@ def _build_seat_command(seat: dict, prompt: str, session_dir: Path) -> SeatInvoc
             None,
             None,
         )
+    if cli == "claude":
+        argv = [
+            "claude", "--print", "--model", model,
+            "--permission-mode", "plan", "--tools", "", "--no-session-persistence",
+        ]
+        effort = seat.get("reasoning_effort")
+        if effort and effort != "none":
+            argv.extend(["--effort", str(effort)])
+        return SeatInvocation(argv, prompt, None, None)
     if cli == "codex":
         # ``codex exec -`` reads the initial prompt from stdin.  Without -o,
         # stdout includes banner/warning/progress beyond the final answer.
@@ -674,12 +788,19 @@ def _build_seat_command(seat: dict, prompt: str, session_dir: Path) -> SeatInvoc
         fd, tmp_name = tempfile.mkstemp(prefix="council-codex-", suffix=".txt")
         os.close(fd)
         output_file = Path(tmp_name)
+        argv = ["codex", "exec", "-", "-m", model]
+        effort = seat.get("reasoning_effort")
+        if effort and effort != "none":
+            argv.extend(["-c", f'model_reasoning_effort="{effort}"'])
+        argv.extend(["-s", "read-only", "-o", str(output_file)])
         return SeatInvocation(
-            ["codex", "exec", "-", "-m", model, "-s", "read-only", "-o", str(output_file)],
+            argv,
             prompt,
             output_file,
             None,
         )
+    if cli == "ollama":
+        return SeatInvocation(["ollama", "run", model], prompt, None, None)
     raise SeatRunError(
         f"[council] cli '{cli}' non supportata (attese: {', '.join(SUPPORTED_CLIS)}).", "unsupported_cli"
     )
@@ -956,8 +1077,12 @@ def _run_relay_stage(
         return RelayRecord(stage.role, chosen_name, seat["model"], verdict, response)
 
 
-def _run_mode(args: argparse.Namespace, mode: str, label: str, brief: str, role_initial_name: str, role_continue_name: str | None, rounds: int) -> None:
-    seat_name, seat = resolve_seat(args)
+def _run_mode(
+    args: argparse.Namespace, mode: str, label: str, brief: str,
+    role_initial_name: str, role_continue_name: str | None, rounds: int,
+    default_routing_role: str,
+) -> None:
+    seat_name, seat = resolve_seat(args, default_routing_role=default_routing_role)
     egress_gate(brief)
     timeout_seconds = _resolve_timeout_seconds(seat, getattr(args, "timeout_seconds", None))
 
@@ -1005,17 +1130,19 @@ def cmd_brainstorm(args: argparse.Namespace) -> None:
         print(f"[council] --rounds {rounds} supera --max-rounds {args.max_rounds}: eseguo solo {args.max_rounds} round.")
         rounds = args.max_rounds
     brief = build_brief(args.question, args.context)
-    _run_mode(args, "brainstorm", args.question, brief, "brainstorm.md", "brainstorm-continue.md", rounds)
+    _run_mode(
+        args, "brainstorm", args.question, brief, "brainstorm.md", "brainstorm-continue.md", rounds, "L-Arch",
+    )
 
 
 def cmd_challenge(args: argparse.Namespace) -> None:
     brief = build_brief(args.plan, args.context)
-    _run_mode(args, "challenge", args.plan, brief, "challenge.md", None, 1)
+    _run_mode(args, "challenge", args.plan, brief, "challenge.md", None, 1, "L-Arch")
 
 
 def cmd_code_review(args: argparse.Namespace) -> None:
     brief = build_brief(None, args.context, diff_path=args.diff)
-    _run_mode(args, "code-review", Path(args.diff).name, brief, "code-review.md", None, 1)
+    _run_mode(args, "code-review", Path(args.diff).name, brief, "code-review.md", None, 1, "L-Code")
 
 
 def cmd_relay(args: argparse.Namespace) -> None:
@@ -1063,9 +1190,42 @@ def cmd_clean(args: argparse.Namespace) -> None:
     print(f"[council] pulizia completata: {removed} sessione/i rimossa/e.")
 
 
+def cmd_routing_status(args: argparse.Namespace) -> None:
+    config = load_config()
+    seats = config["seats"]
+    if not _routing_enabled(config):
+        sys.exit("[council] routing automatico non configurato in seats.yaml.")
+    plan = _routing_context_or_exit(config)
+    capabilities = seat_capabilities(seats)
+    print(f"[council] routing document: {plan.source}")
+    for role in plan.roles:
+        candidates, diagnostics = resolve_role_candidates(
+            plan,
+            seats,
+            capabilities,
+            role,
+            allow_training_risk=bool(args.allow_training_risk),
+        )
+        if candidates:
+            rendered = []
+            for name in candidates:
+                seat = seats[name]
+                effort = seat.get("reasoning_effort")
+                effort_label = f", effort {effort}" if effort and effort != "none" else ""
+                rendered.append(f"{name} ({seat['model']}{effort_label})")
+            print(f"  {role}: " + " -> ".join(rendered))
+        else:
+            detail = "; ".join(diagnostics[:4]) or "nessun seat compatibile"
+            print(f"  {role}: BLOCCATO, {detail}")
+
+
 def _add_common_args(parser: argparse.ArgumentParser, *, include_seat: bool = True) -> None:
     if include_seat:
-        parser.add_argument("--seat", metavar="NAME", help="seat da usare (default: il primo in seats.yaml)")
+        parser.add_argument("--seat", metavar="NAME", help="seat esplicito, prevale sul routing automatico")
+        parser.add_argument(
+            "--routing-role", metavar="ROLE",
+            help="ruolo del documento di routing da usare al posto del default del mode, ad esempio L-Sys",
+        )
     parser.add_argument(
         "--allow-training-risk", action="store_true",
         help="consenti l'uso di un seat senza garanzia zero-retention (solo test tecnici)",
@@ -1126,6 +1286,13 @@ def main() -> int:
     clean.add_argument("--ttl-days", type=int, default=DEFAULT_TTL_DAYS, help=f"default: {DEFAULT_TTL_DAYS}")
     clean.add_argument("--all", action="store_true", help="rimuove tutte le sessioni, ignora il TTL")
     clean.set_defaults(func=cmd_clean)
+
+    routing_status = sub.add_parser("routing-status", help="mostra i seat auto-risolti dal documento privato su questo host")
+    routing_status.add_argument(
+        "--allow-training-risk", action="store_true",
+        help="mostra anche seat senza garanzia zero-retention, solo per test tecnici",
+    )
+    routing_status.set_defaults(func=cmd_routing_status)
 
     args = ap.parse_args()
     args.func(args)

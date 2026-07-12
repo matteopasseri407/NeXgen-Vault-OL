@@ -130,7 +130,7 @@ You don't need to fill out configuration files manually.
 **Why is this Alpha?**
 Linux is the daily-driven platform and the most tested, but the framework is still in Alpha because cross-platform support and core orchestrators are actively settling. Specifically:
 - **Windows Support:** While the core provisioner was just unified into a single Python script (`agent_sync.py`), the MCP config generator (`render.py`) still lacks a Windows dialect, and some runtime paths are inferred rather than confirmed live.
-- **AI Council:** The deterministic orchestrator (`council.py`) supports `opencode`, `agy`, and `codex` seats. Automated tests cover the control flow of all four modes, but vendor adapters and the Windows launcher still need physical cross-platform verification.
+- **AI Council:** The deterministic orchestrator (`council.py`) supports `opencode`, `agy`, `codex`, `claude`, and `ollama` seats. Its optional routing adapter resolves a private decision document to an exact locally verified model and effort, with declared fallbacks, without letting an external workflow rewrite private cross-machine data. Vendor adapters and the Windows launcher still need physical cross-platform verification.
 
 MINIMAL profile is the safer starting point on Windows today. macOS follows the Linux code paths but has seen less real-world use.
 
@@ -275,7 +275,8 @@ Non devi compilare i file di configurazione a mano.
 **Perché siamo in Alpha?**
 Linux è la piattaforma usata quotidianamente e la più testata, ma il framework è in Alpha perché il supporto cross-platform e gli orchestratori principali si stanno ancora stabilizzando. Nello specifico:
 - **Supporto Windows:** Anche se il provisioner principale è appena stato unificato in uno script Python (`agent_sync.py`), il generatore di config MCP (`render.py`) non ha ancora un dialetto Windows, e alcuni percorsi runtime sono dedotti per analogia con Linux piuttosto che confermati dal vivo.
-- **Consiglio AI:** L'orchestratore deterministico (`council.py`) supporta i seat `opencode`, `agy` e `codex`.
+- **Consiglio AI:** L'orchestratore deterministico (`council.py`) supporta i seat `opencode`, `agy`, `codex`, `claude` e `ollama`.
+L'adattatore opzionale di routing risolve un documento privato su modello ed effort verificabili localmente, con fallback dichiarati, senza far riscrivere a un workflow esterno i dati privati cross-machine.
 I test automatici coprono il flusso dei quattro mode.
 Gli adapter dei vendor e il launcher Windows devono ancora essere verificati fisicamente su entrambe le piattaforme.
 

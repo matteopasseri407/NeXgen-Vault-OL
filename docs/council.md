@@ -23,7 +23,7 @@ completely inert. Nothing about the rest of the engine depends on it.
 2. Keep `schema_version: 1` at the root, then pick the seats you have,
    following the comments in the template. Each seat needs `vendor`, `cli`,
    `model`, and an explicit `zero_retention: true|false`. `cli` must be one
-   of `opencode`, `agy`, `codex`. Those are the only CLIs `council.py` knows
+   of `opencode`, `agy`, `codex`, `claude`, or `ollama`. Those are the CLIs `council.py` knows
    how to invoke today. Set `zero_retention: true` only if you've confirmed
    that with a primary source, not a summary. You can also set an optional
    positive `timeout_seconds` for a seat that is known to need more or less
@@ -66,9 +66,10 @@ council code-review \
 **Relay.** A sequential staffage of up to 5 stages, for example
 architect→builder→reviewer→judge), each stage seeing the full original
 brief plus the previous stage's output quoted as untrusted data, never as
-an instruction. Today only `opencode` seats can take part in a relay
-sequence; `agy`/`codex` seats work in the other three modes but not yet
-here.
+an instruction. Every supported CLI can participate when its seat is declared
+in the sequence. The OpenCode cost pre-check only reorders OpenCode candidates
+within their original decision-document order; it never promotes another provider merely
+because it has no OpenCode usage data.
 ```bash
 council relay \
   "Design a rate limiter for the public API." \
@@ -78,6 +79,32 @@ council relay \
 Every mode accepts `--context FILE` for extra background and
 `--allow-training-risk` to use a seat that lacks a confirmed zero-retention
 guarantee. Use it only for non-sensitive technical checks, never for a real brief.
+
+## Automatic routing
+
+An optional `routing:` section in the private `seats.yaml` turns a declared
+private routing document into the default Council choice. Set `decision_file`
+to a relative path inside the private data root, then omit `--seat`
+for brainstorm, challenge, and code review, or omit `--sequence` for relay.
+Council then reads the governed routing table, maps only declared
+`routing_id`/`routing_label` values to an exact local `model` plus optional
+`reasoning_effort`, and checks the local CLI before it invokes anything.
+
+This is deliberately an in-memory adapter. It never lets an external workflow
+rewrite the cross-machine seat configuration. A missing CLI, a different model,
+a different Codex effort, or a zero-retention restriction removes that candidate
+and tries the document's declared fallback. If none remains, the command stops with the
+reason instead of guessing a substitute.
+
+```bash
+council routing-status
+council challenge "Find the dominant risk in this plan."
+council relay "Design a safe migration strategy."
+```
+
+Use `--routing-role L-Sys` to override the mode's configured role for one
+single-seat invocation. An explicit `--seat` or `--sequence` always wins over
+automatic routing.
 
 ## Timeouts
 
@@ -137,7 +164,8 @@ council clean --all           # removes every kept session now
 - The Windows launcher has a portable regression test, but still needs a
   physical Windows run before this Alpha feature can be called cross-platform.
 - Large prompts use stdin for Codex and Antigravity, and a protected temporary
-  attachment for OpenCode. The automated regression coverage is portable, but
-  the current vendor adapters still need live end-to-end verification.
+  attachment for OpenCode. Claude and Ollama use protected stdin. The automated
+  regression coverage is portable, but the current vendor adapters still need
+  live end-to-end verification.
 - Seats via CLI are slow (minutes, not seconds): this is for brainstorming,
   challenging, and review, not a quick question mid-task.
