@@ -1,33 +1,45 @@
 # Firecrawl self-hosted stack.
-# Upstream: https://github.com/mendableai/firecrawl
+# Upstream: https://github.com/firecrawl/firecrawl (moved from
+# github.com/mendableai/firecrawl; the GHCR org moved the same way).
 # This compose deploys the API + a single worker. For production scale-out
 # add more workers or a Redis cluster; see the upstream repo.
 #
-# Images are pinned to explicit version tags (no "latest") so a redeploy is
-# reproducible. To also pin sha256 digests once you have Docker/registry
-# access:
-#   docker pull ghcr.io/mendableai/firecrawl:2.11.0
-#   docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/mendableai/firecrawl:2.11.0
-# then set FIRECRAWL_IMAGE (and FIRECRAWL_PLAYWRIGHT_IMAGE) in .env to the
-# printed ...@sha256:... value.
+# Images are pinned to explicit version tags where upstream publishes them.
+# To also pin sha256 digests once you have Docker/registry access:
+#   docker pull ghcr.io/firecrawl/firecrawl:2.11
+#   docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/firecrawl/firecrawl:2.11
+# then set FIRECRAWL_IMAGE in .env to the printed ...@sha256:... value.
 #
-# NOTE (verify before deploying): the upstream Firecrawl project has been
-# reorganizing its self-host images under the `ghcr.io/firecrawl/*` org and
-# a different multi-service architecture (Postgres-backed queue, SearXNG).
-# The ghcr.io/mendableai/* path below matches this repo's existing simpler
-# API+worker+Redis+Playwright shape; confirm it still resolves on the
-# registry before a production deploy, and re-check upstream's current
-# self-host docs if it does not. This is a pre-existing shape decision, not
-# something this pass changes.
+# VERIFIED 2026-07-12: ghcr.io/mendableai/firecrawl and
+# ghcr.io/mendableai/firecrawl-playwright-service no longer resolve (the
+# GHCR token exchange itself fails, i.e. the repos are gone, not just the
+# tag). ghcr.io/firecrawl/firecrawl:2.11 resolves. ghcr.io/firecrawl/
+# playwright-service publishes NO versioned tags at all today (only
+# `latest`/`linux-amd64`/buildcache variants), so FIRECRAWL_PLAYWRIGHT_IMAGE
+# below is pinned to `latest` on purpose, not by oversight -- the only real
+# way to make it reproducible right now is to pin the sha256 digest you get
+# from a `docker pull ... :latest` + `docker inspect`, the same way as above.
 #
-# Rollback: FIRECRAWL_IMAGE=ghcr.io/mendableai/firecrawl:<older-tag> docker
+# NOT VERIFIED: whether the new ghcr.io/firecrawl/* images still honor the
+# same `pnpm start:production` / `pnpm worker:production` commands and
+# REDIS_URL / PLAYWRIGHT_MICROSERVICE_URL / PORT env vars this compose file
+# assumes -- upstream's self-host docs describe a different multi-service
+# architecture (Postgres-backed queue, SearXNG) for its current release
+# line. This compose keeps the repo's existing simpler API+worker+Redis+
+# Playwright shape on the theory that older-style images still accept it;
+# validate against a real deploy before relying on this in production, and
+# re-check upstream's current self-host docs if firecrawl-api/firecrawl-
+# worker fail to start. Migrating to the new architecture is a separate,
+# deliberate decision, not something this pass makes.
+#
+# Rollback: FIRECRAWL_IMAGE=ghcr.io/firecrawl/firecrawl:<older-tag> docker
 # compose -f firecrawl/docker-compose.yml up -d (see ../backup-restore.sh
 # rollback). No named volumes here — Redis is a transient cache/queue by
 # design, so there is nothing durable to back up in this stack today.
 
 services:
   firecrawl-api:
-    image: ${FIRECRAWL_IMAGE:-ghcr.io/mendableai/firecrawl:2.11.0}
+    image: ${FIRECRAWL_IMAGE:-ghcr.io/firecrawl/firecrawl:2.11}
     container_name: firecrawl-api
     restart: unless-stopped
     command: ["pnpm", "start:production"]
@@ -54,7 +66,7 @@ services:
       retries: 3
 
   firecrawl-worker:
-    image: ${FIRECRAWL_IMAGE:-ghcr.io/mendableai/firecrawl:2.11.0}
+    image: ${FIRECRAWL_IMAGE:-ghcr.io/firecrawl/firecrawl:2.11}
     container_name: firecrawl-worker
     restart: unless-stopped
     command: ["pnpm", "worker:production"]
@@ -90,7 +102,7 @@ services:
       retries: 3
 
   firecrawl-playwright:
-    image: ${FIRECRAWL_PLAYWRIGHT_IMAGE:-ghcr.io/mendableai/firecrawl-playwright-service:2.11.0}
+    image: ${FIRECRAWL_PLAYWRIGHT_IMAGE:-ghcr.io/firecrawl/playwright-service:latest}
     container_name: firecrawl-playwright
     restart: unless-stopped
     environment:

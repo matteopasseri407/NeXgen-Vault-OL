@@ -31,6 +31,14 @@ BOOTSTRAP = DEPLOY / "bootstrap-vps.sh"
 # other floating tags.
 VERSION_TAG = re.compile(r"^\d+(\.\d+){1,2}(-[A-Za-z0-9][A-Za-z0-9.]*)?$")
 
+# Narrow, documented exception: verified 2026-07-12 that ghcr.io/firecrawl/
+# playwright-service publishes NO version-numbered tag at all (only
+# latest/linux-amd64/buildcache variants) -- there is no floating-vs-pinned
+# choice to make here, "latest" is the only tag that exists. Real
+# reproducibility for this one service has to come from a pinned sha256
+# digest (documented in the compose file's header comment), not a tag.
+FLOATING_TAG_EXCEPTIONS = {("firecrawl", "firecrawl-playwright")}
+
 
 def _load_compose(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -55,6 +63,8 @@ def test_no_compose_image_uses_a_latest_tag():
     for name, path in COMPOSE_FILES.items():
         data = _load_compose(path)
         for service, cfg in data["services"].items():
+            if (name, service) in FLOATING_TAG_EXCEPTIONS:
+                continue
             image = cfg.get("image")
             assert image, f"{name}/{service}: no image key"
             tag = _image_tag(image)
@@ -63,6 +73,27 @@ def test_no_compose_image_uses_a_latest_tag():
                 f"{name}/{service}: tag {tag!r} does not look like an explicit "
                 f"version (image={image!r})"
             )
+
+
+def test_floating_tag_exception_is_actually_floating_and_documented():
+    """The exception list must stay narrow: each entry really has no
+    versioned tag upstream (still `latest` today) and the compose file
+    documents why, so the exception doesn't silently rot into a plain
+    unpinned image nobody explains."""
+    for name, service in FLOATING_TAG_EXCEPTIONS:
+        data = _load_compose(COMPOSE_FILES[name])
+        image = data["services"][service]["image"]
+        assert _image_tag(image) == "latest", (
+            f"{name}/{service} is listed as a floating-tag exception but its "
+            f"tag is {_image_tag(image)!r}, not 'latest' -- either upstream "
+            f"started publishing versions (remove the exception and pin one) "
+            f"or this entry is stale"
+        )
+        content = COMPOSE_FILES[name].read_text(encoding="utf-8")
+        assert "no versioned tags" in content or "NO versioned tags" in content, (
+            f"{name}/{service}'s floating tag must stay explained in the "
+            f"compose file's header comment"
+        )
 
 
 def test_every_service_has_a_coherent_healthcheck():
