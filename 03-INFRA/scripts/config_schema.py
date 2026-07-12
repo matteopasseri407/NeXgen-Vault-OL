@@ -24,6 +24,18 @@ COUNCIL_REASONING_EFFORTS = frozenset({"none", "low", "medium", "high", "xhigh",
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 ENTRY_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
+# Exact npm package pin (e.g. "firecrawl-mcp@3.22.3" or "@org/pkg@1.2.3"): an
+# npx server without this can silently resolve to whatever the registry's
+# "latest" happens to be at run time. Kept identical to the constant of the
+# same name in tests/test_mcp_package_pins.py (EXACT_NPM_PIN) so the two
+# never drift into checking different things.
+EXACT_NPM_PIN_RE = re.compile(r"^(?:@[-a-z0-9_.]+/)?[-a-z0-9_.]+@\d+(?:\.\d+){2}$", re.I)
+
+# Heuristic for "this string looks like a literal secret, not a reference".
+# Duplicated from mcp/render.py's LONGTOK (import would be circular: render.py
+# imports this module) -- keep the two patterns identical if either changes.
+LONGTOK_RE = re.compile(r"^[A-Za-z0-9_\-\.=+/]{40,}$")
+
 
 class ConfigValidationError(ValueError):
     """A user-owned configuration does not satisfy its executable contract."""
@@ -113,12 +125,33 @@ def _routing_config(value: Any, source: str | Path) -> None:
         _string_list(routing["relay_roles"], source, "Council routing config.relay_roles", allow_empty=False)
 
 
+def _looks_like_env_reference(value: str) -> bool:
+    """True if a stdio env value defers to another env var instead of
+    embedding a value directly (render.py's own redact() uses this same
+    signal to decide what is safe to print)."""
+    return "${" in value or "{env:" in value
+
+
+def _looks_like_secret_literal(value: str) -> bool:
+    """Same heuristic as render.py's redact(): a long token-charset string
+    that contains at least one digit reads as a pasted credential, not
+    ordinary config data (hostnames, flags, short numbers stay well under the
+    40-char floor)."""
+    return bool(LONGTOK_RE.match(value)) and any(c.isdigit() for c in value)
+
+
 def _env_mapping(value: Any, source: str | Path, where: str) -> dict[str, str]:
     mapping = _mapping(value, source, where)
     for key, item in mapping.items():
         _env_name(key, source, f"{where} key")
         if not isinstance(item, str):
             _error(source, f"{where}.{key} must be a string")
+        if _looks_like_secret_literal(item) and not _looks_like_env_reference(item):
+            _error(
+                source,
+                f"{where}.{key} looks like a literal secret value, not a reference -- "
+                "point it at an environment variable (e.g. \"${VAR}\") instead of embedding the value",
+            )
     return mapping
 
 
@@ -137,6 +170,23 @@ def _validate_timeouts(value: Any, source: str | Path, where: str) -> None:
         _error(source, f"{where} must contain startup and/or tool")
     for key, item in timeouts.items():
         _positive_number(item, source, f"{where}.{key}")
+
+
+def _validate_npx_pin(args: Any, source: str | Path, where: str) -> None:
+    """An npx stdio server without an exact version pin resolves to whatever
+    "latest" is on the npm registry at process-start time -- a silent
+    supply-chain door. Mirrors tests/test_mcp_package_pins.py's
+    EXACT_NPM_PIN check, but as a real validation gate: that test only ever
+    ran against the repo's template manifest, never against the actual
+    manifest.yaml render.py loads from AGENT_VAULT_DATA at runtime."""
+    values = args if isinstance(args, list) else []
+    package = next((item for item in values if isinstance(item, str) and not item.startswith("-")), None)
+    if package is None or not EXACT_NPM_PIN_RE.fullmatch(package):
+        _error(
+            source,
+            f"{where}.args must pin the npx package to an exact version (e.g. 'package@1.2.3' "
+            f"or '@scope/package@1.2.3'), got {package!r}",
+        )
 
 
 def _validate_mcp_server(
@@ -179,9 +229,12 @@ def _validate_mcp_server(
         _validate_timeouts(spec["timeouts"], source, f"{where}.timeouts")
 
     if transport == "stdio":
-        _nonempty_string(spec.get("command"), source, f"{where}.command")
+        command = _nonempty_string(spec.get("command"), source, f"{where}.command")
+        args = spec.get("args")
         if "args" in spec:
-            _string_list(spec["args"], source, f"{where}.args")
+            args = _string_list(spec["args"], source, f"{where}.args")
+        if command == "npx":
+            _validate_npx_pin(args, source, where)
         if "env" in spec:
             _env_mapping(spec["env"], source, f"{where}.env")
         for field in ("url", "url_env", "auth"):

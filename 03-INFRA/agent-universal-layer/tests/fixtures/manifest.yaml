@@ -36,5 +36,5 @@ servers:
   fake-codex-only:
     transport: stdio
     command: npx
-    args: ["-y", "fake-codex-only-mcp"]
+    args: ["-y", "fake-codex-only-mcp@1.0.0"]
     targets: [codex]
