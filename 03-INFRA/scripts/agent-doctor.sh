@@ -59,6 +59,37 @@ fail() { FAILN=$((FAILN+1)); FAILS="${FAILS}${FAILS:+, }$*"; [ "$QUIET" = 1 ] ||
 sec()  { [ "$QUIET" = 1 ] || printf '\n\033[1m%s\033[0m\n' "$*"; }
 code() { curl -s -o /dev/null -m 6 -w '%{http_code}' "$@" 2>/dev/null || echo 000; }
 
+# Temp files created by bearer_cfg() below; always cleaned up on exit so a
+# bearer token never lingers on disk after this script exits.
+_BEARER_CFG_FILES=""
+cleanup_bearer_cfgs() {
+  # shellcheck disable=SC2086
+  [ -n "$_BEARER_CFG_FILES" ] && rm -f $_BEARER_CFG_FILES
+}
+trap cleanup_bearer_cfgs EXIT
+
+# Writes a curl config file (mode 600) with the given bearer token as an
+# Authorization header, instead of passing "Authorization: Bearer <token>"
+# as a curl argv element -- an argv element is visible to any other local
+# user via `ps` or /proc/<pid>/cmdline, a curl config file is not.
+#
+# Sets $_LAST_BEARER_CFG to the file path; pass it to curl via -K/--config
+# (combinable with other curl flags on the same invocation). Deliberately
+# NOT called as `x="$(bearer_cfg ...)"` -- command substitution runs the
+# function in a subshell, so its update to $_BEARER_CFG_FILES would be lost
+# on subshell exit and the EXIT trap above would then have nothing to clean
+# up. Call it as a plain statement (`bearer_cfg "$token"`), then read
+# $_LAST_BEARER_CFG.
+_LAST_BEARER_CFG=""
+bearer_cfg() {
+  local token="$1" f
+  f="$(mktemp)"
+  chmod 600 "$f"
+  printf 'header = "Authorization: Bearer %s"\n' "${token//\"/\\\"}" > "$f"
+  _BEARER_CFG_FILES="$_BEARER_CFG_FILES $f"
+  _LAST_BEARER_CFG="$f"
+}
+
 [ "$QUIET" = 1 ] || printf '\033[1m=== agent-doctor: agent alignment check ===\033[0m\n'
 
 sec "Host"
@@ -223,7 +254,10 @@ if [ -n "${VAULT_LIBRARY_URL:-}" ]; then
   # Streamable HTTP MCP rejects a generic GET without the protocol Accept
   # header. OPTIONS gives a bounded, authenticated route probe without
   # opening a response stream; a healthy endpoint answers 405 here.
-  c=$(code -X OPTIONS -H "Authorization: Bearer ${VAULT_LIBRARY_TOKEN:-}" -H "Accept: application/json, text/event-stream" "$VAULT_LIBRARY_URL")
+  # Bearer token goes through a curl config file (bearer_cfg), not -H on
+  # curl's own argv -- see bearer_cfg()'s comment for why.
+  bearer_cfg "${VAULT_LIBRARY_TOKEN:-}"
+  c=$(code -X OPTIONS -K "$_LAST_BEARER_CFG" -H "Accept: application/json, text/event-stream" "$VAULT_LIBRARY_URL")
   { [ "$c" = 200 ] || [ "$c" = 405 ]; } && ok "vault-library: $c (up)" || fail "vault-library: $c"
 else
   warn "VAULT_LIBRARY_URL not in env"

@@ -8,6 +8,7 @@ ruolo dedicati, parsing VERDICT per ogni round.
 """
 from __future__ import annotations
 import argparse
+import atexit
 import importlib.util
 import json
 import math
@@ -15,6 +16,7 @@ import os
 import queue
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -760,6 +762,85 @@ def new_session_dir(label: str) -> Path:
             session_dir = SESSIONS_DIR / f"{base_name}-{os.urandom(3).hex()}"
 
 
+_STATE_LOCK = threading.Lock()
+_ACTIVE_PROC: subprocess.Popen | None = None
+_ACTIVE_SESSION_DIR: Path | None = None
+_ACTIVE_SESSION_KEEP = False
+_CLEANUP_RAN = False
+
+
+def _set_active_proc(proc: "subprocess.Popen | None") -> None:
+    """Track the seat subprocess currently running, if any, so a SIGTERM or
+    interpreter-exit cleanup can try to stop it. Only one seat runs at a
+    time (brainstorm/challenge/relay invoke seats sequentially), so a single
+    slot is enough."""
+    global _ACTIVE_PROC
+    with _STATE_LOCK:
+        _ACTIVE_PROC = proc
+
+
+def _set_active_session(session_dir: "Path | None", keep: bool = False) -> None:
+    """Track the ephemeral session dir currently in use, so an interrupted
+    run can still be cleaned up like the happy path's ``_finalize_session``
+    would (unless the user asked to keep it with ``--keep-session``)."""
+    global _ACTIVE_SESSION_DIR, _ACTIVE_SESSION_KEEP
+    with _STATE_LOCK:
+        _ACTIVE_SESSION_DIR = session_dir
+        _ACTIVE_SESSION_KEEP = keep
+
+
+def _best_effort_cleanup(*_args) -> None:
+    """Best-effort cleanup for SIGTERM and interpreter exit: try to stop the
+    currently running seat subprocess and remove the in-progress ephemeral
+    session directory (unless it was explicitly kept).
+
+    This is deliberately best-effort and never raises: it must not turn a
+    clean shutdown into a traceback. It also cannot do anything about
+    SIGKILL -- no userspace handler, Python or otherwise, ever runs for
+    that signal; this only covers SIGTERM and normal interpreter exit
+    (uncaught exception, sys.exit, ...), which is the gap the rest of the
+    codebase already leaves uncovered outside the try/finally in
+    ``_run_mode``/``cmd_relay``.
+    """
+    global _CLEANUP_RAN
+    with _STATE_LOCK:
+        if _CLEANUP_RAN:
+            return
+        _CLEANUP_RAN = True
+        proc, session_dir, keep = _ACTIVE_PROC, _ACTIVE_SESSION_DIR, _ACTIVE_SESSION_KEEP
+    if proc is not None:
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        except Exception:
+            pass
+    if session_dir is not None and not keep:
+        shutil.rmtree(session_dir, ignore_errors=True)
+
+
+def _handle_sigterm(signum, frame) -> None:  # pragma: no cover - exercised via _best_effort_cleanup
+    _best_effort_cleanup()
+    # Restore the default disposition and re-deliver the signal to self so
+    # the process still terminates the conventional way (correct exit code,
+    # no swallowed SIGTERM) instead of silently surviving it.
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)
+
+
+def _install_shutdown_handlers() -> None:
+    """Wire the best-effort cleanup into SIGTERM and interpreter exit. Only
+    called from main() (real CLI invocation), never at import time, so
+    importing council.py as a library (tests) never mutates the importing
+    process's signal disposition."""
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+    atexit.register(_best_effort_cleanup)
+
+
 def _drain_lines(stream, line_queue: "queue.Queue[str | None]") -> None:
     for line in stream:
         line_queue.put(line)
@@ -1049,7 +1130,11 @@ def _build_seat_command(seat: dict, prompt: str, session_dir: Path) -> SeatInvoc
         # -s read-only is the same sandbox validated in A0, with no write access
         # for the consultant seat. It scopes the shell/exec tool only, not MCP
         # servers: see the extended note above _build_seat_command.
-        fd, tmp_name = tempfile.mkstemp(prefix="council-codex-", suffix=".txt")
+        # dir=session_dir: the session dir is already private (0700, created by
+        # new_session_dir()) -- without this, mkstemp() falls back to the shared
+        # system temp dir, where the codex seat's raw response briefly lives
+        # outside any of the access controls the rest of the session gets.
+        fd, tmp_name = tempfile.mkstemp(prefix="council-codex-", suffix=".txt", dir=session_dir)
         os.close(fd)
         output_file = Path(tmp_name)
         argv = ["codex", "exec", "-", "-m", model]
@@ -1108,6 +1193,7 @@ def run_seat(
             )
         except OSError as e:
             raise SeatRunError(f"[council] impossibile invocare il seat: {e}", "invocation")
+        _set_active_proc(proc)
 
         if invocation.stdin_text is not None:
             stdin_writer = threading.Thread(
@@ -1193,6 +1279,7 @@ def run_seat(
             raise SeatRunError("[council] il seat ha risposto ma senza testo utilizzabile (output vuoto).", "empty_response")
         return "".join(text_chunks), usage
     finally:
+        _set_active_proc(None)
         if stdin_writer is not None:
             stdin_writer.join(timeout=5)
         if invocation.output_file is not None:
@@ -1371,6 +1458,7 @@ def _run_mode(
 
     keep_session = bool(getattr(args, "keep_session", False))
     session_dir = new_session_dir(label)
+    _set_active_session(session_dir, keep_session)
     try:
         _write_private_text(session_dir / "00-brief.md", brief)
 
@@ -1401,6 +1489,7 @@ def _run_mode(
         print(responses[-1])
     finally:
         _finalize_session(session_dir, keep_session)
+        _set_active_session(None)
 
 
 def cmd_brainstorm(args: argparse.Namespace) -> None:
@@ -1437,6 +1526,7 @@ def cmd_relay(args: argparse.Namespace) -> None:
 
     keep_session = bool(getattr(args, "keep_session", False))
     session_dir = new_session_dir(args.question)
+    _set_active_session(session_dir, keep_session)
     try:
         _write_private_text(session_dir / "00-brief.md", brief)
 
@@ -1463,6 +1553,7 @@ def cmd_relay(args: argparse.Namespace) -> None:
         print(records[-1].response)
     finally:
         _finalize_session(session_dir, keep_session)
+        _set_active_session(None)
 
 
 def cmd_clean(args: argparse.Namespace) -> None:
@@ -1572,6 +1663,7 @@ def _add_common_args(parser: argparse.ArgumentParser, *, include_seat: bool = Tr
 
 
 def main() -> int:
+    _install_shutdown_handlers()
     ap = argparse.ArgumentParser(prog="council", description=__doc__)
     sub = ap.add_subparsers(dest="mode", required=True)
 

@@ -369,4 +369,25 @@ def test_vendor_adapter_passes_declared_effort(monkeypatch, tmp_path, cli, effor
     assert invocation.stdin_text == "brief"
     if cli == "codex":
         assert invocation.output_file is not None
+        # Security fix: mkstemp() must land inside the private (0700) session
+        # dir, not the shared system temp dir -- otherwise the seat's raw
+        # response briefly sits somewhere other local users can read.
+        assert invocation.output_file.parent == tmp_path
         invocation.output_file.unlink()
+
+
+def test_codex_output_file_lands_in_session_dir_not_system_tmp(monkeypatch, tmp_path):
+    council = load_council(monkeypatch, tmp_path)
+    session_dir = tmp_path / "sessions" / "council-test"
+    session_dir.mkdir(parents=True)
+
+    invocation = council._build_seat_command(
+        {"cli": "codex", "model": "vendor/test"}, "brief", session_dir,
+    )
+
+    try:
+        assert invocation.output_file is not None
+        assert invocation.output_file.parent == session_dir
+        assert invocation.output_file.exists()
+    finally:
+        invocation.output_file.unlink(missing_ok=True)

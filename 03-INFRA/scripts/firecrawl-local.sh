@@ -4,6 +4,30 @@ set -euo pipefail
 API_URL="${FIRECRAWL_API_URL:-http://127.0.0.1:33002}"
 API_KEY="${FIRECRAWL_API_KEY:-local-self-hosted}"
 
+# curl config file (mode 600) holding the bearer token as an Authorization
+# header, so the token never appears as a curl argv element -- an argv
+# element is visible to any other local user via `ps` or
+# /proc/<pid>/cmdline, a curl config file is not.
+#
+# Built eagerly here, at the top level of the script, rather than lazily
+# inside a function called from post_json(): post_json() is itself always
+# invoked as `response="$(post_json ...)"` (its curl output is captured),
+# which runs post_json -- and anything it calls -- in a subshell. A
+# subshell's variable assignments never propagate back to the parent shell,
+# so building/assigning $AUTH_CFG lazily from inside that subshell would
+# leave the parent's $AUTH_CFG empty and silently break the cleanup trap
+# below (confirmed live: the temp file was never removed). Building it here
+# means every invocation pays one extra mktemp, even `status`/`--help`
+# which don't need it, but that's the price of a cleanup trap that's
+# actually reachable.
+AUTH_CFG="$(mktemp)"
+chmod 600 "$AUTH_CFG"
+printf 'header = "Authorization: Bearer %s"\n' "${API_KEY//\"/\\\"}" > "$AUTH_CFG"
+cleanup_auth_cfg() {
+  rm -f "$AUTH_CFG"
+}
+trap cleanup_auth_cfg EXIT
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -33,7 +57,7 @@ post_json() {
   local payload="$2"
   curl -fsS \
     -X POST "$API_URL$endpoint" \
-    -H "Authorization: Bearer $API_KEY" \
+    -K "$AUTH_CFG" \
     -H "Content-Type: application/json" \
     -d "$payload"
 }

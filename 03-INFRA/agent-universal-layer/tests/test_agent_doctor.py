@@ -264,3 +264,72 @@ def test_configured_env_var_is_checked_even_when_mode_says_local_only(sandbox):
     # n8n itself is still unreachable in the sandbox: now expected (the var is
     # set), so it must FAIL for real instead of being waved through by Mode.
     assert _lines_with(result.stdout, "✗", "n8n-mcp (5678)"), result.stdout
+
+
+# ── Bearer token off curl's argv (security audit finding, LOW) ───────────
+# The vault-library reachability probe used to pass
+# `-H "Authorization: Bearer $VAULT_LIBRARY_TOKEN"` straight on curl's argv,
+# which any other local user can read via `ps` or /proc/<pid>/cmdline. The
+# fix routes it through a curl config file (bearer_cfg(), mode 600) instead.
+# This stub curl records every invocation's argv (to prove no argv element
+# ever contains "Bearer ...") and, when it sees -K, copies that file's
+# content out (to prove the header still actually reaches curl).
+
+_CURL_STUB_PY = """#!/usr/bin/env python3
+import os
+import sys
+
+args = sys.argv[1:]
+
+argv_log = os.environ.get("CURL_STUB_ARGV_LOG")
+if argv_log:
+    with open(argv_log, "a", encoding="utf-8") as f:
+        f.write(repr(args) + "\\n")
+
+cfg_log = os.environ.get("CURL_STUB_CFG_LOG")
+if cfg_log and "-K" in args:
+    cfg_path = args[args.index("-K") + 1]
+    try:
+        with open(cfg_path, encoding="utf-8") as cf:
+            content = cf.read()
+    except OSError as exc:
+        content = f"<unreadable: {exc}>"
+    with open(cfg_log, "a", encoding="utf-8") as f:
+        f.write(content)
+
+sys.stdout.write("200" if ("-X" in args and "OPTIONS" in args) else "000")
+"""
+
+
+def _stub_curl_capture_bearer_cfg(sandbox) -> tuple[Path, Path]:
+    curl_stub = sandbox.bin_stubs / "curl"
+    curl_stub.write_text(_CURL_STUB_PY, encoding="utf-8")
+    curl_stub.chmod(0o755)
+    return sandbox.home / "curl-argv.log", sandbox.home / "curl-cfg.log"
+
+
+def test_vault_library_bearer_token_never_appears_in_curl_argv(sandbox):
+    argv_log, cfg_log = _stub_curl_capture_bearer_cfg(sandbox)
+
+    result = _run_doctor(
+        sandbox,
+        env_overrides={
+            "VAULT_LIBRARY_URL": "https://vault.example.invalid/mcp",
+            "VAULT_LIBRARY_TOKEN": "super-secret-argv-must-not-see-this",
+            "CURL_STUB_ARGV_LOG": str(argv_log),
+            "CURL_STUB_CFG_LOG": str(cfg_log),
+        },
+    )
+
+    assert "vault-library: 200 (up)" in result.stdout, result.stdout
+
+    all_argv = argv_log.read_text(encoding="utf-8") if argv_log.exists() else ""
+    assert "super-secret-argv-must-not-see-this" not in all_argv, (
+        f"bearer token leaked into curl argv:\n{all_argv}"
+    )
+    assert "-K" in all_argv, f"expected the vault-library probe to use curl's -K/--config:\n{all_argv}"
+
+    cfg_content = cfg_log.read_text(encoding="utf-8") if cfg_log.exists() else ""
+    assert "Authorization: Bearer super-secret-argv-must-not-see-this" in cfg_content, (
+        f"the -K config file did not carry the expected Authorization header:\n{cfg_content}"
+    )
