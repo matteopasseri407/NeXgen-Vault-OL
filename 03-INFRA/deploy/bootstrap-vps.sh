@@ -34,6 +34,19 @@ docker compose version >/dev/null 2>&1 || {
   exit 1
 }
 
+if [ -f .env ]; then
+  # .env.example is world-readable on purpose (placeholder values, no
+  # secrets, lives in a public repo). A plain `cp .env.example .env` does
+  # not change that, so the REAL secrets filled into .env can stay
+  # world-readable unless something tightens it explicitly. Idempotent and
+  # safe to run on every invocation, not just first setup, in case it
+  # drifts back open later.
+  chmod 600 .env
+else
+  echo "missing: .env (cp .env.example .env, then fill in secrets)"
+  exit 1
+fi
+
 # --env-file .env is explicit and REQUIRED here, not cosmetic: docker
 # compose's default .env lookup is relative to the directory of the first
 # -f file (e.g. n8n/), not this script's cwd, so a bare `-f n8n/docker-

@@ -127,6 +127,17 @@ def test_bootstrap_vps_has_strict_mode():
     assert "set -euo pipefail" in content
 
 
+def test_bootstrap_vps_locks_down_env_permissions():
+    """Regression: .env.example is world-readable on purpose (placeholder
+    values, public repo). A plain `cp .env.example .env` inherits that, so
+    the REAL secrets a user fills into .env can stay world-readable unless
+    something tightens it explicitly -- the same bug found and fixed on a
+    real deployment, 2026-07-12, in a sibling override file."""
+    content = BOOTSTRAP.read_text(encoding="utf-8")
+    assert re.search(r"if\s+\[\s+-f\s+\.env\s+\]", content), "expected a check that .env actually exists"
+    assert re.search(r"chmod\s+600\s+\.env\b", content), "expected an explicit chmod 600 on .env"
+
+
 def test_bootstrap_vps_uses_compose_v2_not_legacy():
     content = BOOTSTRAP.read_text(encoding="utf-8")
     # The original bug: `docker-compose -f <file> up ...` (legacy v1 CLI).
