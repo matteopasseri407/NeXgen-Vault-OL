@@ -85,6 +85,11 @@ itself required.
 
 ## Model team (configured by the user)
 
+In plain language: these "lanes" just say which model/CLI handles which kind
+of task. A lane's role name describes the job (deep reasoning, hands-on
+building, quick mechanical work), not a separate product to install — in
+MINIMAL you can point every lane at the one CLI you already have.
+
 - **Frontier (reasoning/architecture)**: `[FILL IN MODEL/CLI — e.g. Claude Opus, GPT-5, Gemini Pro]`
 - **Frontier (orchestration/build)**: `[FILL IN MODEL/CLI]`
 - **Mid-tier (component execution)**: `[FILL IN MODEL/CLI — e.g. DeepSeek V4-Pro]`
