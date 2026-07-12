@@ -4,6 +4,11 @@ Local secret store for this vault. **Everything in this folder is git-ignored
 except three files**: this `README.md`, `.gitkeep`, and `secrets-registry.md`.
 Never commit plaintext secrets.
 
+If more than one person will use this vault or the self-hosted stack it
+points at, read `docs/team.md` first: this archive has one passphrase and
+no per-person scoping, so sharing it means sharing every secret inside it
+equally.
+
 ## Two files, two jobs
 
 - **`archive/master-secrets.md.gpg`** — the encrypted archive. Holds the actual

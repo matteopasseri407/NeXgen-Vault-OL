@@ -8,6 +8,11 @@ A **Local-Only** install does NOT need any of this — everything runs on the
 workstation with native CLI search, model vision for OCR, and no remote
 automations.
 
+If you're standing this stack up for more than one person, its credentials
+(`.env`, the n8n/Firecrawl/OCR tunnels) are shared infrastructure with no
+per-person scoping today — read `docs/team.md` before you adopt it as
+shared team infra.
+
 ## What is here
 
 ```
