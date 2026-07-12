@@ -80,31 +80,34 @@ Every mode accepts `--context FILE` for extra background and
 `--allow-training-risk` to use a seat that lacks a confirmed zero-retention
 guarantee. Use it only for non-sensitive technical checks, never for a real brief.
 
-## Automatic routing
+## Human-approved routing proposals
 
 An optional `routing:` section in the private `seats.yaml` turns a declared
-private routing document into the default Council choice. Set `decision_file`
-to a relative path inside the private data root, then omit `--seat`
-for brainstorm, challenge, and code review, or omit `--sequence` for relay.
-Council then reads the governed routing table, maps only declared
-`routing_id`/`routing_label` values to an exact local `model` plus optional
-`reasoning_effort`, and checks the local CLI before it invokes anything.
+private routing document into a locally verified proposal. Set `decision_file`
+to a relative path inside the private data root. Council reads the governed
+routing table, maps only declared `routing_id`/`routing_label` values to an
+exact local `model` plus optional `reasoning_effort`, and checks the local CLI
+before it displays a candidate.
 
 This is deliberately an in-memory adapter. It never lets an external workflow
 rewrite the cross-machine seat configuration. A missing CLI, a different model,
 a different Codex effort, or a zero-retention restriction removes that candidate
-and tries the document's declared fallback. If none remains, the command stops with the
-reason instead of guessing a substitute.
+from the proposal with the reason instead of guessing a substitute.
+
+The proposal never executes a model. `brainstorm`, `challenge`, and `code-review`
+require an explicit human `--seat`; `relay` requires an explicit human
+`--sequence`. The human decides the role, the model, and how many seats to call.
 
 ```bash
 council routing-status
-council challenge "Find the dominant risk in this plan."
-council relay "Design a safe migration strategy."
+council propose --mode challenge
+council challenge "Find the dominant risk in this plan." --seat code-seat
+council relay "Design a safe migration strategy." --sequence "planner=planner-seat,judge=judge-seat"
 ```
 
-Use `--routing-role L-Sys` to override the mode's configured role for one
-single-seat invocation. An explicit `--seat` or `--sequence` always wins over
-automatic routing.
+Use `--routing-role L-Sys` to ask for a different proposal. It still requires
+`--seat` before a single-seat invocation. `council propose --mode relay` lists
+the available candidates for the configured relay roles without invoking them.
 
 ## Timeouts
 

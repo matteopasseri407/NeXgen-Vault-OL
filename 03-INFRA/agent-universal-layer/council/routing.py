@@ -27,7 +27,7 @@ PROBE_TIMEOUT_SECONDS = 10
 
 
 class RoutingContractError(ValueError):
-    """The private decision document cannot safely drive an automatic Council choice."""
+    """The private decision document cannot safely form a verified Council proposal."""
 
 
 @dataclass(frozen=True)
@@ -236,7 +236,7 @@ def seat_capabilities(seats: dict[str, dict[str, Any]]) -> dict[str, SeatCapabil
         if cli == "claude":
             capabilities[name] = SeatCapability(
                 False,
-                "Claude non espone una lista locale del modello esatto, quindi non entra nell'auto-routing",
+                "Claude non espone una lista locale del modello esatto, quindi non entra nella proposta automatizzata",
             )
             continue
 

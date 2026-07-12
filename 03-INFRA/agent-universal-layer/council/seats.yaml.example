@@ -54,14 +54,15 @@
 #     - role: reviewer
 #       seat: seat-d
 #
-# Routing automatico da un documento privato di decisione:
-# - se attivo, Council legge soltanto il documento dichiarato nel Vault e risolve il
-#   modello concreto qui dichiarato; un workflow esterno non riscrive mai questo file;
-# - ogni seat auto-routable deve avere routing_id e/o routing_label, oltre a
-#   model ed effort esatti per la sua CLI;
-# - la CLI viene interrogata in sola lettura quando espone un inventario
-#   locale. Se il modello non è verificabile, manca o viola zero_retention,
-#   Council passa al fallback dichiarato o si ferma, senza inventarne uno.
+# Proposta di routing da un documento privato di decisione:
+# - se attivo, Council legge soltanto il documento dichiarato nel Vault e propone
+#   il modello concreto qui dichiarato; non esegue mai un seat senza --seat o
+#   una relay senza --sequence scelti esplicitamente dall'umano;
+# - ogni seat proponibile deve avere routing_id e/o routing_label, oltre a model
+#   ed effort esatti per la sua CLI;
+# - la CLI viene interrogata in sola lettura quando espone un inventario locale.
+#   Un modello non verificabile, assente o non autorizzato da zero_retention è
+#   mostrato come escluso, non viene sostituito o invocato automaticamente.
 #
 # routing:
 #   enabled: true
@@ -70,6 +71,7 @@
 #     brainstorm: L-Arch
 #     challenge: L-Arch
 #     code-review: L-Code
+#   # Questi sono ruoli da proporre, non default di esecuzione.
 #   relay_roles: [L-Arch, L-Build, L-Code]
 
 # Campo root obbligatorio, aggiornalo solo con una migrazione documentata.

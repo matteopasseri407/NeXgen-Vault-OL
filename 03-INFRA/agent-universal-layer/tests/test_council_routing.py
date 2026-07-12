@@ -182,7 +182,7 @@ def test_private_config_rejects_routing_path_escape(monkeypatch, tmp_path, decis
         council.load_config()
 
 
-def test_auto_routing_selects_a_verified_fallback_instead_of_first_static_seat(monkeypatch, tmp_path):
+def test_routing_proposal_requires_an_explicit_human_selected_seat(monkeypatch, tmp_path, capsys):
     council = load_council(monkeypatch, tmp_path)
     write_seats(
         council,
@@ -230,13 +230,17 @@ def test_auto_routing_selects_a_verified_fallback_instead_of_first_static_seat(m
     )
 
     args = argparse.Namespace(seat=None, routing_role=None, allow_training_risk=False, mode="challenge")
-    name, seat = council.resolve_seat(args, default_routing_role="L-Arch")
 
-    assert name == "deepseek"
-    assert seat["model"] == "opencode-go/deepseek-v4-pro"
+    with pytest.raises(SystemExit, match="scelta umana richiesta"):
+        council.resolve_seat(args, default_routing_role="L-Arch")
+
+    output = capsys.readouterr().out
+    assert "Nessuna chiamata a modelli è stata effettuata" in output
+    assert "deepseek: opencode-go/deepseek-v4-pro via opencode" in output
+    assert "rischio training consentito" not in output
 
 
-def test_automatic_relay_uses_real_cli_candidates(monkeypatch, tmp_path):
+def test_relay_without_sequence_requires_human_selection(monkeypatch, tmp_path, capsys):
     council = load_council(monkeypatch, tmp_path)
     write_seats(
         council,
@@ -280,12 +284,53 @@ def test_automatic_relay_uses_real_cli_candidates(monkeypatch, tmp_path):
         no_stats_precheck=True,
     )
     config = council.load_config()
-    stages = council._load_relay_sequence(args, config, config["seats"])
+    with pytest.raises(SystemExit, match="scelta umana richiesta"):
+        council._load_relay_sequence(args, config, config["seats"])
 
-    assert [(stage.role, stage.candidates) for stage in stages] == [
-        ("L-Arch", ["gemini", "deepseek"]),
-        ("L-Code", ["deepseek"]),
-    ]
+    output = capsys.readouterr().out
+    assert "proposta per relay" in output
+    assert "gemini: Gemini 3.1 Pro (High) via agy, effort high" in output
+    assert "deepseek: opencode-go/deepseek-v4-pro via opencode" in output
+
+
+def test_propose_lists_candidates_but_never_runs_a_seat(monkeypatch, tmp_path, capsys):
+    council = load_council(monkeypatch, tmp_path)
+    write_seats(
+        council,
+        """
+        routing:
+          enabled: true
+          decision_file: routing.md
+          mode_defaults:
+            challenge: L-Code
+        seats:
+          deepseek:
+            vendor: deepseek
+            cli: opencode
+            model: opencode-go/deepseek-v4-pro
+            routing_label: DeepSeek V4 Pro
+            zero_retention: true
+        """,
+    )
+    routing_path = council._vault_data_root() / "routing.md"
+    routing_path.parent.mkdir(parents=True, exist_ok=True)
+    routing_path.write_text(LEGACY_ROUTING_TABLE, encoding="utf-8")
+    monkeypatch.setattr(
+        council,
+        "seat_capabilities",
+        lambda _seats: {"deepseek": types.SimpleNamespace(available=True, reason="rilevato")},
+    )
+    invoked = []
+    monkeypatch.setattr(council, "run_seat", lambda *_args, **_kwargs: invoked.append(True))
+
+    council.cmd_propose(
+        argparse.Namespace(proposal_mode="challenge", routing_role=None, allow_training_risk=False)
+    )
+
+    assert invoked == []
+    output = capsys.readouterr().out
+    assert "Nessuna chiamata a modelli è stata effettuata" in output
+    assert "scegli tu un candidato" in output
 
 
 def test_opencode_usage_hint_never_reorders_other_cli_positions(monkeypatch, tmp_path):

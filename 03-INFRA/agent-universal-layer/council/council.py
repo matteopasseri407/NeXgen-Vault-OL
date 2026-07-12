@@ -109,7 +109,7 @@ def _routing_document_path(config: dict) -> Path:
     routing = config.get("routing") or {}
     decision_file = routing.get("decision_file")
     if not isinstance(decision_file, str) or not decision_file:
-        sys.exit("[council] routing automatico fermo: decision_file non configurato nel piano dati.")
+        sys.exit("[council] proposta di routing non disponibile: decision_file non configurato nel piano dati.")
     return _vault_data_root() / Path(decision_file)
 
 
@@ -185,33 +185,94 @@ def _routing_context_or_exit(config: dict):
     try:
         return load_routing_plan(_routing_document_path(config))
     except RoutingContractError as exc:
-        sys.exit(f"[council] routing automatico fermo: {exc}.")
+        sys.exit(f"[council] proposta di routing non disponibile: {exc}.")
 
 
-def _routing_candidates_or_exit(
+def _routing_role_for_mode(args: argparse.Namespace, config: dict, default_routing_role: str | None) -> str | None:
+    """Map a Council mode to a *proposal* role, never to an execution choice."""
+    mode_defaults = ((config.get("routing") or {}).get("mode_defaults") or {})
+    return (
+        getattr(args, "routing_role", None)
+        or mode_defaults.get(getattr(args, "mode", None))
+        or default_routing_role
+    )
+
+
+def _proposal_lines_for_role(
     plan, seats: dict, capabilities: dict, role: str, *, allow_training_risk: bool,
-) -> list[str]:
+) -> tuple[list[str], bool]:
+    """Render locally verified candidates without selecting or invoking one."""
     try:
         candidates, diagnostics = resolve_role_candidates(
             plan, seats, capabilities, role, allow_training_risk=allow_training_risk,
         )
     except RoutingContractError as exc:
-        sys.exit(f"[council] routing automatico fermo: {exc}.")
+        return [f"  {role}: non definito nel documento, {exc}."], False
+
+    lines = [f"  {role}:"]
     if candidates:
-        return candidates
-    detail = "; ".join(diagnostics[:4]) or "nessun seat locale compatibile"
-    risk_hint = " Usa --allow-training-risk solo per un test tecnico non sensibile." if not allow_training_risk else ""
-    sys.exit(f"[council] routing automatico fermo per il ruolo '{role}': {detail}.{risk_hint}")
+        for index, name in enumerate(candidates, 1):
+            seat = seats[name]
+            effort = seat.get("reasoning_effort")
+            effort_label = f", effort {effort}" if effort and effort != "none" else ""
+            retention = "zero-retention verificata" if seat.get("zero_retention", False) else "rischio training consentito"
+            lines.append(
+                f"    {index}. {name}: {seat['model']} via {seat['cli']}{effort_label}, {retention}."
+            )
+    else:
+        lines.append("    Nessun seat locale compatibile.")
+    if diagnostics:
+        lines.append("    Esclusi: " + "; ".join(diagnostics[:4]) + ".")
+    return lines, bool(candidates)
 
 
-def _resolve_routing_seat(args: argparse.Namespace, config: dict, seats: dict, role: str) -> str:
+def _print_routing_proposal(
+    args: argparse.Namespace, config: dict, seats: dict, roles: list[str], *, title: str,
+) -> bool:
+    """Show a host-local, policy-aware menu. This function never calls a model."""
     plan = _routing_context_or_exit(config)
     capabilities = seat_capabilities(seats)
-    candidates = _routing_candidates_or_exit(
-        plan, seats, capabilities, role,
-        allow_training_risk=bool(getattr(args, "allow_training_risk", False)),
-    )
-    return candidates[0]
+    allow_training_risk = bool(getattr(args, "allow_training_risk", False))
+    has_candidates = False
+    print(f"[council] proposta per {title}. Nessuna chiamata a modelli è stata effettuata.")
+    for role in roles:
+        lines, role_has_candidates = _proposal_lines_for_role(
+            plan, seats, capabilities, str(role), allow_training_risk=allow_training_risk,
+        )
+        has_candidates = has_candidates or role_has_candidates
+        for line in lines:
+            print(line)
+    return has_candidates
+
+
+def _print_static_seat_menu(seats: dict) -> None:
+    print("[council] nessun routing privato configurato. Seat dichiarati, scegli tu:")
+    for name, seat in seats.items():
+        effort = seat.get("reasoning_effort")
+        effort_label = f", effort {effort}" if effort and effort != "none" else ""
+        print(f"  {name}: {seat['model']} via {seat['cli']}{effort_label}.")
+
+
+def _require_human_single_selection(
+    args: argparse.Namespace, config: dict, seats: dict, default_routing_role: str | None,
+) -> None:
+    role = _routing_role_for_mode(args, config, default_routing_role)
+    if _routing_enabled(config):
+        if role:
+            has_candidates = _print_routing_proposal(
+                args, config, seats, [role], title=f"{getattr(args, 'mode', 'Council')} / {role}",
+            )
+        else:
+            has_candidates = _print_routing_proposal(args, config, seats, [], title=getattr(args, "mode", "Council"))
+    else:
+        _print_static_seat_menu(seats)
+        has_candidates = bool(seats)
+    if has_candidates:
+        sys.exit(
+            "[council] scelta umana richiesta: rilancia con --seat NOME. "
+            "--routing-role restringe solo la proposta, non avvia un seat."
+        )
+    sys.exit("[council] nessun seat idoneo da selezionare: correggi mapping, CLI o policy indicati sopra.")
 
 
 def _seat_quota_pool(seat: dict) -> str:
@@ -230,21 +291,7 @@ def resolve_seat(args: argparse.Namespace, *, default_routing_role: str | None =
         sys.exit(f"[council] {SEATS_PATH} è vuoto: espansione inerte, niente da fare.")
     seat_name = getattr(args, "seat", None)
     if not seat_name:
-        mode_defaults = ((config.get("routing") or {}).get("mode_defaults") or {})
-        requested_role = (
-            getattr(args, "routing_role", None)
-            or mode_defaults.get(getattr(args, "mode", None))
-            or default_routing_role
-        )
-        if _routing_enabled(config):
-            if not requested_role:
-                sys.exit(
-                    "[council] routing automatico attivo ma senza ruolo: "
-                    "configura routing.mode_defaults o passa --routing-role."
-                )
-            seat_name = _resolve_routing_seat(args, config, seats, requested_role)
-        else:
-            seat_name = next(iter(seats))
+        _require_human_single_selection(args, config, seats, default_routing_role)
     if seat_name not in seats:
         sys.exit(f"[council] seat sconosciuto: {seat_name}. Disponibili: {', '.join(seats)}")
     seat = seats[seat_name]
@@ -330,24 +377,22 @@ def _relay_stage_from_yaml(item) -> RelayStage:
     return RelayStage(role=role, candidates=_dedupe_keep_order(candidates))
 
 
-def _automatic_relay_sequence(args: argparse.Namespace, config: dict, seats: dict) -> list[RelayStage]:
-    routing = config.get("routing") or {}
-    roles = routing.get("relay_roles") or []
-    if not roles:
+def _require_human_relay_selection(args: argparse.Namespace, config: dict, seats: dict) -> None:
+    if _routing_enabled(config):
+        routing = config.get("routing") or {}
+        roles = [str(role) for role in routing.get("relay_roles") or []]
+        if not roles:
+            roles = list(_routing_context_or_exit(config).roles)
+        has_candidates = _print_routing_proposal(args, config, seats, roles, title="relay")
+    else:
+        _print_static_seat_menu(seats)
+        has_candidates = bool(seats)
+    if has_candidates:
         sys.exit(
-            "[council] routing automatico attivo ma senza routing.relay_roles: "
-            "passa --sequence oppure completa il piano dati."
+            "[council] scelta umana richiesta: rilancia relay con --sequence "
+            "role=seat|fallback,... oppure con il nome esplicito di una sequence."
         )
-    plan = _routing_context_or_exit(config)
-    capabilities = seat_capabilities(seats)
-    stages: list[RelayStage] = []
-    for role in roles:
-        candidates = _routing_candidates_or_exit(
-            plan, seats, capabilities, str(role),
-            allow_training_risk=bool(getattr(args, "allow_training_risk", False)),
-        )
-        stages.append(RelayStage(role=str(role), candidates=candidates))
-    return stages
+    sys.exit("[council] nessun seat idoneo da selezionare: correggi mapping, CLI o policy indicati sopra.")
 
 
 def _load_relay_sequence(args: argparse.Namespace, config: dict, seats: dict) -> list[RelayStage]:
@@ -360,16 +405,7 @@ def _load_relay_sequence(args: argparse.Namespace, config: dict, seats: dict) ->
             sys.exit(f"[council] sequence relay '{spec}' non trovata in {SEATS_PATH}.")
         stages = [_relay_stage_from_yaml(item) for item in sequences[spec]]
     else:
-        configured = config.get("sequence")
-        if configured is None:
-            configured = (config.get("sequences") or {}).get("default")
-        if configured is None:
-            if _routing_enabled(config):
-                stages = _automatic_relay_sequence(args, config, seats)
-            else:
-                sys.exit("[council] relay richiede --sequence role=seat|fallback,... oppure una sequence/default in seats.yaml.")
-        else:
-            stages = [_relay_stage_from_yaml(item) for item in configured]
+        _require_human_relay_selection(args, config, seats)
 
     if not stages:
         sys.exit("[council] sequence relay vuota.")
@@ -1194,7 +1230,7 @@ def cmd_routing_status(args: argparse.Namespace) -> None:
     config = load_config()
     seats = config["seats"]
     if not _routing_enabled(config):
-        sys.exit("[council] routing automatico non configurato in seats.yaml.")
+        sys.exit("[council] proposta di routing non configurata in seats.yaml.")
     plan = _routing_context_or_exit(config)
     capabilities = seat_capabilities(seats)
     print(f"[council] routing document: {plan.source}")
@@ -1219,12 +1255,57 @@ def cmd_routing_status(args: argparse.Namespace) -> None:
             print(f"  {role}: BLOCCATO, {detail}")
 
 
+def cmd_propose(args: argparse.Namespace) -> None:
+    """Show the verified menu and leave every execution choice to the human."""
+    config = load_config()
+    seats = config["seats"]
+    if not seats:
+        sys.exit(f"[council] {SEATS_PATH} è vuoto: espansione inerte, niente da fare.")
+    if not _routing_enabled(config):
+        _print_static_seat_menu(seats)
+        print("[council] scegli tu quanti seat chiamare e rilancia con --seat o --sequence.")
+        return
+
+    plan = _routing_context_or_exit(config)
+    routing = config.get("routing") or {}
+    requested_role = getattr(args, "routing_role", None)
+    proposal_mode = getattr(args, "proposal_mode", None)
+
+    if requested_role:
+        roles = [requested_role]
+        title = requested_role
+    elif proposal_mode == "relay":
+        roles = [str(role) for role in routing.get("relay_roles") or []] or list(plan.roles)
+        title = "relay"
+    elif proposal_mode:
+        role = (routing.get("mode_defaults") or {}).get(proposal_mode)
+        if not role:
+            sys.exit(
+                f"[council] nessun ruolo proposto per il mode '{proposal_mode}': "
+                "passa --routing-role ROLE oppure completa routing.mode_defaults."
+            )
+        roles = [str(role)]
+        title = proposal_mode
+    else:
+        roles = list(plan.roles)
+        title = "tutti i ruoli"
+
+    has_candidates = _print_routing_proposal(args, config, seats, roles, title=title)
+    if not has_candidates:
+        print("[council] nessun candidato è idoneo su questo host con questa policy, non c'è nulla da invocare.")
+        return
+    if proposal_mode == "relay":
+        print("[council] scegli tu quanti stadi usare e rilancia con --sequence role=seat|fallback,...")
+    else:
+        print("[council] scegli tu un candidato e rilancia il mode con --seat NOME.")
+
+
 def _add_common_args(parser: argparse.ArgumentParser, *, include_seat: bool = True) -> None:
     if include_seat:
-        parser.add_argument("--seat", metavar="NAME", help="seat esplicito, prevale sul routing automatico")
+        parser.add_argument("--seat", metavar="NAME", help="seat scelto esplicitamente dall'umano")
         parser.add_argument(
             "--routing-role", metavar="ROLE",
-            help="ruolo del documento di routing da usare al posto del default del mode, ad esempio L-Sys",
+            help="ruolo del documento da proporre, ad esempio L-Sys, non avvia un seat senza --seat",
         )
     parser.add_argument(
         "--allow-training-risk", action="store_true",
@@ -1287,12 +1368,24 @@ def main() -> int:
     clean.add_argument("--all", action="store_true", help="rimuove tutte le sessioni, ignora il TTL")
     clean.set_defaults(func=cmd_clean)
 
-    routing_status = sub.add_parser("routing-status", help="mostra i seat auto-risolti dal documento privato su questo host")
+    routing_status = sub.add_parser("routing-status", help="mostra i candidati proposti e verificati su questo host")
     routing_status.add_argument(
         "--allow-training-risk", action="store_true",
         help="mostra anche seat senza garanzia zero-retention, solo per test tecnici",
     )
     routing_status.set_defaults(func=cmd_routing_status)
+
+    propose = sub.add_parser("propose", help="propone seat verificati, senza invocare modelli")
+    propose.add_argument(
+        "--mode", dest="proposal_mode", choices=("brainstorm", "challenge", "code-review", "relay"),
+        help="mostra la proposta per un mode Council",
+    )
+    propose.add_argument("--routing-role", metavar="ROLE", help="mostra la proposta per un ruolo preciso")
+    propose.add_argument(
+        "--allow-training-risk", action="store_true",
+        help="mostra anche seat senza garanzia zero-retention, solo per test tecnici",
+    )
+    propose.set_defaults(func=cmd_propose)
 
     args = ap.parse_args()
     args.func(args)
