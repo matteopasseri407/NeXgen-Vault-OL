@@ -4,6 +4,10 @@ There is no single uninstall command yet. Removal is manual because every write 
 
 ## 1. Stop the recurring sync (MULTI profile, Linux/systemd only)
 
+This stops the timer and deletes the two unit files this project created
+under `~/.config/systemd/user/`; nothing outside that folder is touched, and
+you can recreate them by rerunning the MULTI setup if you change your mind:
+
 ```bash
 systemctl --user disable --now agent-sync.timer
 rm -f ~/.config/systemd/user/agent-sync.service ~/.config/systemd/user/agent-sync.timer
@@ -25,11 +29,14 @@ If a `.bak` file exists from before this project touched the config, restore it.
 
 ## 3. Remove the bootstrap pointer files
 
+These are the per-CLI bootstrap files this project pointed at its
+instructions. Only remove them if you're not also using them for something
+else unrelated to this project — deleting one wipes any of your own content
+that lived in the same file, not just this project's pointer:
+
 ```bash
 rm -f ~/CLAUDE.md ~/.codex/AGENTS.md ~/.gemini/config/AGENTS.md
 ```
-
-Only remove these if you're not using them for something else unrelated to this project.
 
 ## 4. Remove the skill folders this project copied in
 
@@ -51,15 +58,20 @@ catalog; remove only the managed library folders you recognize.
 
 ## 5. Remove the vault clone
 
+**This is the destructive step.** `~/KnowledgeVault` holds both the engine
+and everything you've written into it: your notes, your projects, and
+`99-INDEX/USER-PROFILE.md`. Deleting it deletes all of that together, and
+there is no undo unless you have your own backup or a separate Git remote.
+Back up anything under `01-NOTES/`, `02-PROJECTS/`, or `04-NOW/` first if you
+want to keep it, then:
+
 ```bash
 rm -rf ~/KnowledgeVault   # or wherever you cloned it
 ```
 
-This deletes your notes, projects, and `99-INDEX/USER-PROFILE.md` along with the engine. Back up anything under `01-NOTES/`, `02-PROJECTS/`, or `04-NOW/` first if you want to keep it.
-
 ## 6. Cloud-Server mode: tear down the VPS stack separately
 
-If you deployed `03-INFRA/deploy/` (n8n, Firecrawl, OCR) on a VPS, that's a separate Docker Compose stack on a separate machine. `docker compose down -v` in that stack's folder removes its containers and volumes; this repo's uninstall does not reach your VPS over the network.
+If you deployed `03-INFRA/deploy/` (n8n, Firecrawl, OCR) on a VPS, that's a separate Docker Compose stack on a separate machine; this repo's uninstall does not reach it over the network, so you tear it down yourself. Back up anything you want to keep from it first (n8n workflows, Firecrawl data, OCR state) — `docker compose down -v` in that stack's folder deletes its containers *and* its volumes, so that data does not survive the command.
 
 ## 7. Log and secrets left behind
 
