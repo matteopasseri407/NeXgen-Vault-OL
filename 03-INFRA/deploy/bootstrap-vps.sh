@@ -47,6 +47,28 @@ else
   exit 1
 fi
 
+# n8n encrypts every credential it stores with N8N_ENCRYPTION_KEY. Leave it
+# unset and n8n auto-generates one INSIDE the n8n-data volume on first
+# boot instead -- which means it silently rides along in plaintext inside
+# every volume backup made by backup-restore.sh, so anyone who gets a copy
+# of a backup tarball can decrypt every credential n8n ever held. Generate
+# one explicitly here instead, so it lives in .env (chmod 600 above,
+# git-ignored) rather than inside the backed-up volume. Idempotent: only
+# fires when the line is missing or empty, so it never overwrites a key
+# that's already in use -- safe to run on every invocation, not just first
+# setup.
+if ! grep -q '^N8N_ENCRYPTION_KEY=.\+' .env; then
+  require openssl
+  n8n_key="$(openssl rand -hex 32)"
+  awk -v key="$n8n_key" '
+    /^N8N_ENCRYPTION_KEY=/ { print "N8N_ENCRYPTION_KEY=" key; found=1; next }
+    { print }
+    END { if (!found) print "N8N_ENCRYPTION_KEY=" key }
+  ' .env > .env.tmp && mv .env.tmp .env
+  chmod 600 .env
+  echo "==> generated N8N_ENCRYPTION_KEY in .env (first run)"
+fi
+
 # --env-file .env is explicit and REQUIRED here, not cosmetic: docker
 # compose's default .env lookup is relative to the directory of the first
 # -f file (e.g. n8n/), not this script's cwd, so a bare `-f n8n/docker-

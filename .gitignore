@@ -25,6 +25,11 @@
 *.sandbox
 tmp-sandbox-*/
 
+# n8n volume backup archives (backup-restore.sh) — as sensitive as every
+# credential n8n has ever managed; chmod 600/700'd on disk, must never be
+# tracked. Secrets-at-rest hardening, 2026-07-12.
+03-INFRA/deploy/backups/
+
 # Keys and credentials, wherever they land
 *.key
 *.pem

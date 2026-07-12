@@ -26,6 +26,13 @@
 #
 # Archive naming: <volume>_<UTC timestamp>.tar.gz, e.g.
 #   n8n-data_20260712T140502Z.tar.gz
+#
+# WARNING: a backup archive is exactly as sensitive as every credential
+# n8n has ever managed -- it's an uncompressed copy of the whole n8n-data
+# volume, encryption key included if N8N_ENCRYPTION_KEY wasn't set before
+# first boot (see .env.example). $BACKUP_DIR and every archive in it are
+# created with restrictive permissions (0700 / 0600) and are git-ignored;
+# treat a copy of one leaving this host the same as a copy of .env.
 
 set -euo pipefail
 
@@ -76,6 +83,7 @@ volumes_for() {
 do_backup_one() {
   local volume="$1"
   mkdir -p "$BACKUP_DIR"
+  chmod 700 "$BACKUP_DIR"
   local stamp
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   local archive_name="${volume}_${stamp}.tar.gz"
@@ -85,6 +93,10 @@ do_backup_one() {
     -v "$BACKUP_DIR:/backup" \
     "$HELPER_IMAGE" \
     tar czf "/backup/$archive_name" -C /volume .
+  # Tighten immediately after creation -- never leave a window where the
+  # archive sits at whatever default mode the helper container's umask
+  # produced (typically world-readable).
+  chmod 600 "$BACKUP_DIR/$archive_name"
   prune_old_backups "$volume"
 }
 

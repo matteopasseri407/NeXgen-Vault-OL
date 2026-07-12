@@ -24,6 +24,12 @@ services:
       - N8N_PROTOCOL=http
       - NODE_ENV=production
       - GENERIC_TIMEZONE=${TZ:-UTC}
+      # Encrypts every credential n8n stores. Required: without this set,
+      # n8n auto-generates its own key INSIDE the n8n-data volume, which
+      # then leaks in plaintext through every volume backup (see
+      # ../backup-restore.sh and .env.example). bootstrap-vps.sh
+      # auto-generates and persists this into .env on first run.
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
       # MCP server (enable in n8n Settings → MCP Server)
       # - N8N_MCP_TOKEN=${N8N_MCP_TOKEN}
     volumes:

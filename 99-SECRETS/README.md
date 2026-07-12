@@ -39,17 +39,26 @@ registry. Never paste a value into a normal vault note or a final summary.
 ```bash
 cd 99-SECRETS && mkdir -p archive
 
-# first time: start from an empty file
-: > /tmp/secrets.md
+# Every step below puts the FULL plaintext archive on disk, however
+# briefly. mktemp + chmod 600 BEFORE any content lands -- never a plain
+# redirect to a predictable path like /tmp/secrets.md, which is created
+# at the umask's default mode (often world-readable) for as long as the
+# edit takes. Same principle already used elsewhere in this repo:
+# bootstrap-vps.sh's `chmod 600 .env` and council.py's _write_private_text.
+SECRETS_TMP="$(mktemp)"
+chmod 600 "$SECRETS_TMP"
+
+# first time: start from an empty file (SECRETS_TMP is already empty and
+# private from mktemp/chmod above — nothing else to do)
 
 # later: decrypt to edit
-gpg -d archive/master-secrets.md.gpg > /tmp/secrets.md
+gpg -d archive/master-secrets.md.gpg > "$SECRETS_TMP"
 
-# ...edit /tmp/secrets.md...
+# ...edit $SECRETS_TMP...
 
 # re-encrypt (symmetric passphrase) and wipe the plaintext
-gpg -c -o archive/master-secrets.md.gpg /tmp/secrets.md
-shred -u /tmp/secrets.md
+gpg -c -o archive/master-secrets.md.gpg "$SECRETS_TMP"
+shred -u "$SECRETS_TMP"
 ```
 
 Use whatever key/passphrase manager you prefer; the above is the minimal
