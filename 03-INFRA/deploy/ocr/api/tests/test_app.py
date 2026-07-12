@@ -9,6 +9,10 @@ Covers the NX-02 audit fix (2026-07-10):
     of buffering the whole body first (await file.read()) and checking
     the size afterwards.
 
+Covers the auth hardening pass (2026-07-12, finding B): POST /ocr gates on
+an optional VAULT_OCR_TOKEN bearer token, defaulting to WARN-and-allow when
+unset for backward compatibility with existing local/tunnel-only deploys.
+
 rapidocr/onnxruntime are intentionally NOT installed for these tests (too
 heavy for a unit-test run): a stub module satisfies app.py's top-level
 `from rapidocr import RapidOCR`, and get_engine() is monkeypatched with a
@@ -23,6 +27,7 @@ import re
 import sys
 import types
 from pathlib import Path
+from typing import Any
 
 import pytest
 from PIL import Image
@@ -204,3 +209,96 @@ def test_read_upload_within_limit_returns_full_body_when_within_limit(app_module
     data = asyncio.run(run())
     assert data == b"\xff" * 500
     assert fake.bytes_served == 500
+
+
+# --- Auth (finding B): POST /ocr gates on an optional VAULT_OCR_TOKEN. ------
+
+
+def load_app_module_with_token(monkeypatch, token: str | None) -> Any:
+    """Loads a fresh app.py with VAULT_OCR_TOKEN set (or explicitly unset)
+    BEFORE import, since app.py reads it into a module-level constant at
+    import time -- setting it after the fact on the loaded module would not
+    exercise the same code path a real process start does."""
+    if token is None:
+        monkeypatch.delenv("VAULT_OCR_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("VAULT_OCR_TOKEN", token)
+    return load_app_module()
+
+
+@pytest.fixture
+def client_no_token(monkeypatch):
+    """Default/backward-compatible posture: VAULT_OCR_TOKEN unset."""
+    from fastapi.testclient import TestClient
+
+    mod = load_app_module_with_token(monkeypatch, None)
+    monkeypatch.setattr(mod, "get_engine", lambda: FakeEngine())
+    return TestClient(mod.app)
+
+
+@pytest.fixture
+def client_with_token(monkeypatch):
+    """VAULT_OCR_TOKEN set: the API now requires a matching bearer token."""
+    from fastapi.testclient import TestClient
+
+    mod = load_app_module_with_token(monkeypatch, "s3cr3t-test-token")
+    monkeypatch.setattr(mod, "get_engine", lambda: FakeEngine())
+    return TestClient(mod.app)
+
+
+def test_ocr_without_token_configured_accepts_unauthenticated_requests(client_no_token):
+    """Backward compatibility: an operator who never set VAULT_OCR_TOKEN
+    (every deploy before this hardening pass, and any local/tunnel-only
+    deploy today) must keep working exactly as before."""
+    response = client_no_token.post(
+        "/ocr",
+        files={"file": ("page.png", _image_bytes("PNG"), "image/png")},
+    )
+    assert response.status_code == 200
+
+
+def test_ocr_without_token_configured_logs_warning_once(client_no_token, caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="vault_ocr_api"):
+        for _ in range(3):
+            client_no_token.post(
+                "/ocr",
+                files={"file": ("page.png", _image_bytes("PNG"), "image/png")},
+            )
+    warnings = [r for r in caplog.records if "VAULT_OCR_TOKEN is not set" in r.message]
+    assert len(warnings) == 1, "expected exactly one warning, not one per request"
+
+
+def test_ocr_with_token_configured_rejects_missing_header(client_with_token):
+    response = client_with_token.post(
+        "/ocr",
+        files={"file": ("page.png", _image_bytes("PNG"), "image/png")},
+    )
+    assert response.status_code == 401
+
+
+def test_ocr_with_token_configured_rejects_wrong_token(client_with_token):
+    response = client_with_token.post(
+        "/ocr",
+        files={"file": ("page.png", _image_bytes("PNG"), "image/png")},
+        headers={"Authorization": "Bearer wrong-token"},
+    )
+    assert response.status_code == 401
+
+
+def test_ocr_with_token_configured_accepts_correct_bearer_token(client_with_token):
+    response = client_with_token.post(
+        "/ocr",
+        files={"file": ("page.png", _image_bytes("PNG"), "image/png")},
+        headers={"Authorization": "Bearer s3cr3t-test-token"},
+    )
+    assert response.status_code == 200
+
+
+def test_health_endpoint_never_requires_a_token(client_with_token):
+    """/health stays open even with VAULT_OCR_TOKEN set: it backs the
+    container's own Docker healthcheck (see ../../docker-compose.yml),
+    which does not send an Authorization header."""
+    response = client_with_token.get("/health")
+    assert response.status_code == 200

@@ -28,6 +28,7 @@ require() {
 }
 
 require docker
+require openssl
 docker compose version >/dev/null 2>&1 || {
   echo "missing: the Docker Compose v2 plugin ('docker compose'). Legacy"
   echo "docker-compose (v1) is not supported by this script."
@@ -47,27 +48,47 @@ else
   exit 1
 fi
 
-# n8n encrypts every credential it stores with N8N_ENCRYPTION_KEY. Leave it
-# unset and n8n auto-generates one INSIDE the n8n-data volume on first
-# boot instead -- which means it silently rides along in plaintext inside
-# every volume backup made by backup-restore.sh, so anyone who gets a copy
-# of a backup tarball can decrypt every credential n8n ever held. Generate
-# one explicitly here instead, so it lives in .env (chmod 600 above,
-# git-ignored) rather than inside the backed-up volume. Idempotent: only
-# fires when the line is missing or empty, so it never overwrites a key
-# that's already in use -- safe to run on every invocation, not just first
-# setup.
-if ! grep -q '^N8N_ENCRYPTION_KEY=.\+' .env; then
-  require openssl
-  n8n_key="$(openssl rand -hex 32)"
-  awk -v key="$n8n_key" '
-    /^N8N_ENCRYPTION_KEY=/ { print "N8N_ENCRYPTION_KEY=" key; found=1; next }
-    { print }
-    END { if (!found) print "N8N_ENCRYPTION_KEY=" key }
-  ' .env > .env.tmp && mv .env.tmp .env
+# Auto-generates a secret INTO .env the first time it's needed, instead of
+# asking the user to invent or remember one by hand. Idempotent: a value
+# already present in .env (non-empty) is left untouched on every later run,
+# so this never rotates a secret out from under a running deploy.
+ensure_env_secret() {
+  local var="$1"
+  local current
+  current="$(grep -E "^${var}=" .env | tail -1 | cut -d '=' -f2-)"
+  if [ -n "$current" ]; then
+    return 0
+  fi
+  local generated
+  generated="$(openssl rand -hex 32)"
+  if grep -qE "^${var}=" .env; then
+    local tmp
+    tmp="$(mktemp)"
+    awk -v var="$var" -v val="$generated" -F'=' 'BEGIN{OFS="="} $1==var{$0=var"="val} {print}' .env > "$tmp"
+    mv "$tmp" .env
+  else
+    printf '%s=%s\n' "$var" "$generated" >> .env
+  fi
   chmod 600 .env
-  echo "==> generated N8N_ENCRYPTION_KEY in .env (first run)"
-fi
+  echo "  generated ${var} in .env (auto, first run)"
+}
+
+# N8N_ENCRYPTION_KEY: n8n encrypts every credential it stores with this key.
+# Leave it unset and n8n auto-generates one INSIDE the n8n-data volume on
+# first boot instead -- which means it silently rides along in plaintext
+# inside every volume backup made by backup-restore.sh, so anyone who gets a
+# copy of a backup tarball can decrypt every credential n8n ever held.
+# Generating it here means it lives in .env (chmod 600 above, git-ignored)
+# rather than inside the backed-up volume.
+ensure_env_secret N8N_ENCRYPTION_KEY
+
+# FIRECRAWL_REDIS_PASSWORD (finding C: firecrawl-redis had no requirepass/
+# ACL at all before). VAULT_OCR_TOKEN is deliberately NOT auto-generated
+# here -- the OCR API treats it as opt-in (see ocr/api/app.py) and defaults
+# to logging a warning rather than requiring it, to stay backward-compatible
+# with existing local/tunnel-only deploys; generate it yourself in .env if
+# you want to turn enforcement on.
+ensure_env_secret FIRECRAWL_REDIS_PASSWORD
 
 # --env-file .env is explicit and REQUIRED here, not cosmetic: docker
 # compose's default .env lookup is relative to the directory of the first

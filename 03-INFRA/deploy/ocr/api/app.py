@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import os
+import secrets
 import time
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from PIL import Image
 from rapidocr import RapidOCR
 
@@ -15,6 +17,38 @@ MAX_BYTES = int(os.getenv("VAULT_OCR_MAX_BYTES", "15728640"))
 READ_CHUNK_BYTES = 65536
 ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP"}
 ENGINE: RapidOCR | None = None
+
+# Bearer-token gate, extending the pattern already used by n8n-mcp/
+# vault-library to this service. Optional by design: this API has
+# historically had no auth at all and is normally reached only via an SSH
+# tunnel bound to 127.0.0.1 (see ../../README.md), so requiring a token
+# unconditionally would break every existing local/tunnel-only deploy the
+# moment this ships. If VAULT_OCR_TOKEN is unset or empty, requests are
+# still accepted but a warning is logged once (not once per request) so an
+# operator notices the gap. Set VAULT_OCR_TOKEN (see .env.example) to
+# actually require the header.
+VAULT_OCR_TOKEN = os.getenv("VAULT_OCR_TOKEN", "").strip()
+_logger = logging.getLogger("vault_ocr_api")
+_warned_no_token = False
+
+
+async def require_ocr_token(authorization: str | None = Header(default=None)) -> None:
+    global _warned_no_token
+    if not VAULT_OCR_TOKEN:
+        if not _warned_no_token:
+            _logger.warning(
+                "VAULT_OCR_TOKEN is not set: the OCR API is accepting requests "
+                "without authentication. Set VAULT_OCR_TOKEN in .env to require "
+                "a bearer token (see .env.example)."
+            )
+            _warned_no_token = True
+        return
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    presented = authorization.removeprefix("Bearer ").strip()
+    if not secrets.compare_digest(presented, VAULT_OCR_TOKEN):
+        raise HTTPException(status_code=401, detail="invalid bearer token")
+
 
 app = FastAPI(
     title="Vault OCR API",
@@ -93,6 +127,7 @@ def health() -> dict[str, Any]:
 async def ocr(
     file: UploadFile = File(...),
     min_confidence: float = Form(0.0),
+    _auth: None = Depends(require_ocr_token),
 ) -> dict[str, Any]:
     data = await read_upload_within_limit(file, MAX_BYTES)
     if not data:

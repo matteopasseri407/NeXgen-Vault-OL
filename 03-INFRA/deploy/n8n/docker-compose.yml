@@ -30,8 +30,12 @@ services:
       # ../backup-restore.sh and .env.example). bootstrap-vps.sh
       # auto-generates and persists this into .env on first run.
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
-      # MCP server (enable in n8n Settings → MCP Server)
-      # - N8N_MCP_TOKEN=${N8N_MCP_TOKEN}
+      # MCP server (enable in n8n Settings → MCP Server, then paste the same
+      # token here and in .env). This line used to be commented out, which
+      # meant N8N_MCP_TOKEN never reached the container even after a user
+      # filled it into .env as .env.example instructed — the n8n-mcp client
+      # would connect with no bearer token at all. Fixed 2026-07-12.
+      - N8N_MCP_TOKEN=${N8N_MCP_TOKEN}
     volumes:
       - n8n-data:/home/node/.n8n
     mem_limit: 1g

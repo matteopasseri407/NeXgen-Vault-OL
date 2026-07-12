@@ -24,6 +24,11 @@ services:
       - "127.0.0.1:3033:3033"
     environment:
       VAULT_OCR_MAX_BYTES: "15728640"
+      # Optional bearer token (see .env.example + api/app.py:require_ocr_token).
+      # Left empty by default: the API logs a WARN and stays open, matching
+      # this service's historical no-auth behavior for local/tunnel-only
+      # use. Fill it in to require the header on POST /ocr.
+      VAULT_OCR_TOKEN: ${VAULT_OCR_TOKEN:-}
       OMP_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"

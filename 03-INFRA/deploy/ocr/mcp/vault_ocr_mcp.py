@@ -15,10 +15,19 @@ from typing import Any
 
 API_URL = os.environ.get("VAULT_OCR_API_URL", "http://127.0.0.1:33003").rstrip("/")
 MAX_LOCAL_BYTES = int(os.environ.get("VAULT_OCR_MAX_LOCAL_BYTES", "15728640"))
+# Mirrors the API's own VAULT_OCR_TOKEN (see ../api/app.py:require_ocr_token).
+# Empty by default: the API accepts unauthenticated requests unless an
+# operator sets a token on both sides, so this client stays a no-op until
+# then instead of breaking every existing deploy.
+API_TOKEN = os.environ.get("VAULT_OCR_TOKEN", "").strip()
 SERVER_NAME = "vault-ocr"
 SERVER_VERSION = "1.0.0"
 LOG_PATH = os.environ.get("VAULT_OCR_MCP_LOG")
 FRAMING = "headers"
+
+
+def auth_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {API_TOKEN}"} if API_TOKEN else {}
 
 
 def debug(event: str, **fields: Any) -> None:
@@ -89,7 +98,8 @@ def text_content(text: str) -> dict[str, Any]:
 
 
 def request_json(url: str, timeout: int = 20) -> dict[str, Any]:
-    with urllib.request.urlopen(url, timeout=timeout) as response:
+    req = urllib.request.Request(url, headers=auth_headers())
+    with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -136,10 +146,12 @@ def multipart_request(path: Path, data: bytes, min_confidence: float, timeout: i
     )
     parts.append(f"--{boundary}--\r\n".encode("utf-8"))
     body = b"".join(parts)
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    headers.update(auth_headers())
     req = urllib.request.Request(
         f"{API_URL}/ocr",
         data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        headers=headers,
         method="POST",
     )
     try:
