@@ -40,7 +40,15 @@ banner(){
 detect_os(){
   case "$(uname -s 2>/dev/null)" in
     Linux*)  OS=linux;  HINT_PKG="sudo apt install" ;;
-    Darwin*) OS=macos;  HINT_PKG="brew install" ;;
+    Darwin*)
+      OS=macos
+      if command -v brew >/dev/null 2>&1; then
+        HINT_PKG="brew install"
+      else
+        # brew itself is missing — "brew install X" would be circular advice.
+        HINT_PKG="install Homebrew (https://brew.sh), then run: brew install"
+      fi
+      ;;
     MINGW*|MSYS*|CYGWIN*) OS=windows; HINT_PKG="winget install / choco install" ;;
     *)       OS=unknown; HINT_PKG="your package manager" ;;
   esac
