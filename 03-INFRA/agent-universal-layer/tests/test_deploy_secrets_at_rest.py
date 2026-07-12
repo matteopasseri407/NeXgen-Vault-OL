@@ -62,7 +62,7 @@ def test_bootstrap_vps_generates_n8n_encryption_key_idempotently():
     content = BOOTSTRAP.read_text(encoding="utf-8")
     assert "openssl rand -hex 32" in content, (
         "expected bootstrap-vps.sh to generate N8N_ENCRYPTION_KEY "
-        "programmatically with openssl rand, never a value Matteo has to "
+        "programmatically with openssl rand, never a value the user has to "
         "invent or remember"
     )
     assert "N8N_ENCRYPTION_KEY" in content
@@ -244,8 +244,8 @@ def test_secrets_readme_uses_mktemp_with_explicit_chmod_before_gpg_writes():
 
 def test_secrets_readme_still_documents_symmetric_gpg_and_shred():
     """Guard against accidentally changing the actual crypto flow while
-    fixing the permission window — no new passphrase/manual step for
-    Matteo, same gpg -c / shred -u ending as before."""
+    fixing the permission window — no new passphrase/manual step for the
+    user, same gpg -c / shred -u ending as before."""
     content = SECRETS_README.read_text(encoding="utf-8")
     assert "gpg -c" in content
     assert "shred -u" in content
