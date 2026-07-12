@@ -83,6 +83,119 @@ jobs:
             --repo . \
             --commit-range "$RANGE"
 
+  ruff-baseline:
+    # NX-06: ruff is not clean yet (52 pre-existing findings at the time this
+    # gate was added). Rather than fail every PR on that debt, or ignore ruff
+    # entirely, this job compares current findings against a committed
+    # baseline (03-INFRA/ruff-baseline.json), grouped by (file, rule code)
+    # with a count. It fails ONLY when a (file, code) pair is new, or an
+    # existing one's count goes UP - see 03-INFRA/scripts/ruff_baseline_check.py
+    # for the exact rule and its docstring for how to regenerate the baseline
+    # after intentionally fixing or accepting findings.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install ruff
+        # Pinned to the version the committed baseline was generated with:
+        # a ruff bump can change which rules fire by default and shift the
+        # finding counts for reasons unrelated to any given PR's diff. Bump
+        # this deliberately, alongside `--generate`-ing a fresh baseline.
+        run: pip install "ruff==0.15.20"
+
+      - name: Ruff baseline gate (03-INFRA)
+        run: python3 03-INFRA/scripts/ruff_baseline_check.py
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck all shell scripts
+        # Same discovery pattern as the "Shell syntax check" step in
+        # self-check, swapping `bash -n` for `shellcheck`. ubuntu-latest
+        # ships shellcheck preinstalled.
+        run: find . -path ./.git -prune -o -name "*.sh" -print0 | xargs -0 shellcheck
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: pip-audit (every requirements*.txt in the repo)
+        # No package.json/package-lock.json exists in this repo (checked at
+        # the time this job was added) so there is no npm audit step; add
+        # one alongside this if a Node project shows up later.
+        run: find . -path ./.git -prune -o -iname "requirements*.txt" -print0 | xargs -0 -n1 pip-audit -r
+
+  compose-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Docker Compose files
+        # `docker compose config` only parses/merges/validates the model
+        # (env var interpolation, schema) - it doesn't need a running daemon,
+        # pull images, or build anything. Docker is preinstalled on
+        # ubuntu-latest runners.
+        run: |
+          set -euo pipefail
+          for f in \
+            03-INFRA/deploy/ocr/docker-compose.yml \
+            03-INFRA/deploy/n8n/docker-compose.yml \
+            03-INFRA/deploy/firecrawl/docker-compose.yml \
+          ; do
+            echo "== $f =="
+            docker compose -f "$f" config >/dev/null
+          done
+
+  powershell-analysis:
+    # Pure static linting of .ps1 files on Linux - not execution. The
+    # existing engine-tests-windows job (windows-latest) is untouched and
+    # stays the only job that runs anything on Windows.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PowerShell version
+        # ubuntu-latest GitHub-hosted runners ship PowerShell Core (pwsh)
+        # preinstalled; this step also fails fast and visibly if a future
+        # runner image ever drops it, instead of silently skipping analysis.
+        run: pwsh -Version
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -Repository PSGallery
+
+      - name: PSScriptAnalyzer (static analysis, no execution)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = Get-ChildItem -Path . -Recurse -Filter '*.ps1' -File |
+            Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' }
+          if (-not $files) {
+            Write-Host "No .ps1 files found."
+            exit 0
+          }
+          $results = Invoke-ScriptAnalyzer -Path $files.FullName -Severity Warning, Error
+          $results | Format-Table -AutoSize
+          $blocking = $results | Where-Object { $_.Severity -eq 'Error' }
+          if ($blocking) {
+            Write-Error "PSScriptAnalyzer found $($blocking.Count) Error-severity finding(s)."
+            exit 1
+          }
+
   engine-tests:
     # Regression net for the engine (B1, 2026-07-08): sandboxed, never touches
     # the runner's real HOME. Canonical runner is `python -m pytest` (not

@@ -5,7 +5,7 @@
 # il leak-check sulle fixture (criterio di accettazione B1). Il gemello
 # Windows (run.ps1) invochera' lo stesso `python -m pytest`, non questo file.
 set -u
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 if ! python3 -c "import pytest" >/dev/null 2>&1; then
   echo "tests/run.sh: manca pytest. Installa con: pip3 install --user pytest" >&2
