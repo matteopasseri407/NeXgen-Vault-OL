@@ -19,7 +19,7 @@ on either laptop, so it fires regardless of which machine happens to be on.
 **What it does:** fires every 14 days, builds a short reminder message.
 That's it — it does not run `vault-groom` itself, does not gate on how much
 debt has accumulated, and does not touch the vault. If the vault is
-already clean, `vault-groom plan` is a free read-only look; the reminder's
+already clean, `vault-groom preview` is a free read-only look; the reminder's
 only job is to make sure you don't forget it exists.
 
 **What it does NOT do out of the box:** send you anything. The shipped

@@ -25,7 +25,7 @@
             {
               "id": "reminder-message",
               "name": "message",
-              "value": "Promemoria vault: quando puoi lancia `vault-groom plan` per vedere se serve una passata di pulizia. E' una lettura, non muove nulla da sola.",
+              "value": "Promemoria vault: quando puoi lancia `vault-groom preview` per vedere se serve una passata di pulizia. E' una lettura, non muove nulla da sola.",
               "type": "string"
             }
           ]
