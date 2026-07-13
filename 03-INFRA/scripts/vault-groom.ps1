@@ -41,7 +41,13 @@ $ErrorActionPreference = 'Stop'
 
 $Vault    = if ($env:VAULT) { $env:VAULT } else { Join-Path $env:USERPROFILE 'KnowledgeVault' }
 $Playbook = '03-INFRA/vault-grooming-playbook.md'
-$AuditScript = '03-INFRA/scripts/vault_groom_audit.py'
+# Resolved via $PSScriptRoot (this script's own real directory), not $Vault:
+# vault_groom_audit.py is pure engine tooling shipped in the same commit as
+# this wrapper, never a per-user content file like the playbook above. A
+# $Vault-relative path only works after agent-sync has propagated this file
+# into the vault -- see vault-groom.sh's matching comment for the real bug
+# this fixes (found on the first live Linux run, 2026-07-13).
+$AuditScript = Join-Path $PSScriptRoot 'vault_groom_audit.py'
 $Model    = if ($env:GROOM_MODEL) { $env:GROOM_MODEL } else { 'claude-sonnet-5' }
 $Runner   = if ($env:GROOM_RUNNER) { $env:GROOM_RUNNER } else { 'claude' }
 $StateDir = if ($env:GROOM_STATE_DIR) { $env:GROOM_STATE_DIR } else { Join-Path $env:USERPROFILE '.local/state/vault-groom' }

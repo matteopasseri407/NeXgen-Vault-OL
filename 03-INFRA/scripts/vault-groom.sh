@@ -34,7 +34,25 @@ set -euo pipefail
 
 VAULT="${AGENT_VAULT_DATA:-${VAULT:-$HOME/KnowledgeVault}}"
 PLAYBOOK="03-INFRA/vault-grooming-playbook.md"
-AUDIT_SCRIPT="03-INFRA/scripts/vault_groom_audit.py"
+# Resolved relative to THIS script's own real location (same SELF/readlink
+# pattern as vault-push.sh), not to $VAULT: vault_groom_audit.py is pure
+# engine tooling that ships in the same commit as this wrapper, never a
+# per-user customizable content file like the playbook above. A $VAULT-
+# relative path would only work after an `agent-sync apply` had propagated
+# this file into the vault -- real bug found on the very first live run
+# (2026-07-13): the write pass succeeded and pushed 9 real commits, but the
+# audit-record step crashed with "No such file or directory" because this
+# file, added today, had never been synced into the vault.
+SELF="$0"
+while [ -L "$SELF" ]; do
+  TARGET="$(readlink "$SELF")"
+  case "$TARGET" in
+    /*) SELF="$TARGET" ;;
+    *) SELF="$(dirname "$SELF")/$TARGET" ;;
+  esac
+done
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$SELF")" && pwd)"
+AUDIT_SCRIPT="$SCRIPT_DIR/vault_groom_audit.py"
 MODEL="${GROOM_MODEL:-claude-sonnet-5}"
 RUNNER="${GROOM_RUNNER:-claude}"
 STATE_DIR="${GROOM_STATE_DIR:-$HOME/.local/state/vault-groom}"

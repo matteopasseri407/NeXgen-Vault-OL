@@ -112,21 +112,20 @@ def _write_empty_stub(bin_dir: Path, name: str, record_path: Path) -> None:
 
 @pytest.fixture
 def groom_env(tmp_path, monkeypatch):
-    # The real architecture: $VAULT IS the engine checkout (README's own
-    # install step clones NeXgen-Engine straight to ~/KnowledgeVault), so
-    # vault-groom.sh's relative "03-INFRA/..." paths resolve inside the
-    # vault itself. This fixture mirrors that: it seeds the playbook AND a
-    # real copy of vault_groom_audit.py (already covered standalone in
-    # test_vault_groom_audit.py -- using the real file here gives genuine
-    # end-to-end coverage of the wrapper calling it, not just argv shape).
+    # $PLAYBOOK is genuinely vault-relative (README's install clones the
+    # engine straight into ~/KnowledgeVault, and the playbook is meant to be
+    # user-customizable content, so this fixture seeds a copy) -- but
+    # $AUDIT_SCRIPT is resolved via vault-groom.sh's OWN real location
+    # (SCRIPT_DIR, same pattern as vault-push.sh), never via $VAULT. GROOM_SH
+    # below points at the real engine checkout, so the real
+    # vault_groom_audit.py sitting right next to it is found automatically;
+    # no copy needed here. (A $VAULT-relative AUDIT_SCRIPT was the actual bug
+    # on the first live run, 2026-07-13: this fixture's OWN old copy-in trick
+    # masked it in every test.)
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "03-INFRA" / "scripts").mkdir(parents=True)
     (vault / "03-INFRA" / "vault-grooming-playbook.md").write_text("playbook\n", encoding="utf-8")
-    (vault / "03-INFRA" / "scripts" / "vault_groom_audit.py").write_text(
-        (REAL_VAULT / "03-INFRA" / "scripts" / "vault_groom_audit.py").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
     _git(vault, "init", "-q", "-b", "main")
     _git(vault, "config", "user.email", "nexgen-tests.invalid")
     _git(vault, "config", "user.name", "Test")
