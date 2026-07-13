@@ -1,0 +1,60 @@
+{
+  "name": "Vault Grooming Reminder (14gg)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 14
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger-1",
+      "name": "Every 14 days",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "reminder-message",
+              "name": "message",
+              "value": "Promemoria vault: quando puoi lancia `vault-groom plan` per vedere se serve una passata di pulizia. E' una lettura, non muove nulla da sola.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "build-reminder-text-1",
+      "name": "Build reminder text",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 300],
+      "notes": "PLACEHOLDER, not a real channel: this node only builds the message text. Add YOUR OWN notification node after it (Telegram, Slack, email, a webhook, whatever channel you already use for other alerts) and wire it to the `message` field this node outputs. See 03-INFRA/deploy/n8n/workflows/README.md."
+    }
+  ],
+  "connections": {
+    "Every 14 days": {
+      "main": [
+        [
+          {
+            "node": "Build reminder text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
