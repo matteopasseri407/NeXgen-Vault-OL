@@ -10,81 +10,133 @@ of any engine release.
 
 ## [Unreleased]
 
-A follow-up pass closing every remaining item from the 2026-07-13
-beta-readiness review that didn't make the 0.4.0 cut, plus the vault
-grooming ("gardener") work that review called for.
+The 2026-07-13 pre-beta hardening round: everything between the 0.4.0 tag
+and handing the engine to its first two (Windows) beta testers. Fed by an
+independent second-model review of the whole range, an external
+architecture challenge (Council relay to a real codex seat), and three
+implementation waves with adversarial re-review.
 
 ### Added
 
-- Vault grooming (`vault-groom.sh`/`.ps1`) now supports `codex` and `agy`
-  as runners via `GROOM_RUNNER`, not just `claude` — each using that
-  CLI's own verified read-only/write-scoping mechanism (`-s
-  read-only`/`workspace-write` for codex, `--mode plan`/`accept-edits`
-  for agy). `opencode` fails loudly with an explanation instead of
-  guessing, since it has no per-invocation permission-scoping flag today.
-  First behavioral test coverage this script has ever had (12 tests
-  pinning the exact argv/stdin per mode x runner).
+- `vault-push` is cross-platform: its staging/commit/push logic moved into
+  an `agent_sync.py vault-push` subcommand (same host-wide lock and
+  subprocess timeouts as the rest of the control plane), with
+  `vault-push.sh` and a new `vault-push.ps1` as thin launchers. When the
+  engine itself is unreachable and `KNOWLEDGE_VAULT_REMOTE` is set, both
+  launchers fall back to a minimal shell+git emergency lane, announcing
+  the degraded mode loudly instead of failing.
+- `install.ps1`: native Windows preflight twin of `install.sh` (`-Check`
+  mirrors `--check`), so the documented first command works in a default
+  PowerShell prompt.
+- On Windows, `agent-sync apply` now registers the commands directory on
+  the user PATH (idempotent, registry-type-preserving), and
+  `agent-doctor.ps1` verifies it by actually resolving `agent-sync` in a
+  fresh process. Before this, the linked bare commands were documented
+  but unreachable on a fresh Windows install.
+- `render.py --expected-servers <cli>`: the manifest-derived,
+  env-filtered list of MCP servers a CLI should have. `agent-doctor
+  --strict` (both twins) derives its expected set from it instead of a
+  hardcoded 4-name list that permanently failed legitimate Local-Only
+  installs.
+- The vault gardener's write pass now runs inside a disposable clone of
+  the vault with no remote configured — it physically cannot push,
+  whatever the runner. A mechanical audit checks the produced commits in
+  both directions (planned-but-missing AND touched-but-unplanned,
+  path-exact, archive-rename aware) on a strictly linear history, and
+  only a fully clean, still-fresh run is promoted — a fast-forward of the
+  exact audited commit — into the real vault; anything else stays
+  quarantined in the clone with the vault untouched. Runners: `claude`,
+  `codex`, `agy` via `GROOM_RUNNER` (`opencode` refuses loudly, it has no
+  per-invocation permission scoping today).
+- First behavioral CI coverage for the PowerShell twins: `vault-groom.ps1`
+  now runs for real under pwsh on both ubuntu and windows runners, and
+  the vault-push contract tests (divergence/rebase recovery, mirror
+  realignment, genuinely concurrent pushes) run on windows-latest too.
+- A class-level invariant test: every project command documented as a
+  bare command must be linked by the provisioner on every OS it claims —
+  the bug class this round kept finding one instance at a time, closed as
+  a class.
+- Council: codex seats pass `--skip-git-repo-check` (the first real
+  multi-vendor run died on codex's trusted-directory startup check);
+  `council relay --continue-on-reject` to run the full stage sequence
+  despite an intermediate rejection.
 - An import-ready n8n workflow
   (`03-INFRA/deploy/n8n/workflows/vault-grooming-reminder.json`) for the
-  gardener's 14-day reminder the playbook already described but nothing
-  shipped. Deliberately reminder-only, no notification channel baked in
-  — the grooming pass itself stays on-demand, never self-scheduled, to
-  avoid two machines colliding on the same vault's git history.
-- `council relay --continue-on-reject`, to run the full declared stage
-  sequence anyway when you want every seat's opinion regardless of an
-  intermediate rejection.
+  gardener's 14-day reminder. Reminder-only by design — the grooming pass
+  itself stays on-demand, never self-scheduled.
 
 ### Changed
 
-- `council relay` now stops on an intermediate `VERDICT: REJECT` by
-  default instead of running (and spending quota on) every remaining
-  stage after a plan was already rejected.
-- `council`'s reasoning-effort forwarding is now honest per seat:
-  `--think` for ollama and `--variant` for opencode are actually
-  forwarded (previously silently ignored); agy, which has no such flag,
-  is now labeled "(non applicato da questa CLI)" instead of implying it
-  applies.
-- `vault-groom.sh`/`.ps1` default to the read-only `plan` lane; `run`
-  (and its push) now requires an explicit argument on both launchers.
+- `vault-groom` CLI contract: a bare run (or `preview`) is always
+  read-only; the guarded propose → typed-yes → write lane is the explicit
+  `vault-groom apply`. The interim `plan`/`run` arguments exit with a
+  migration hint. The approved tranche's fingerprint is the sha256 of the
+  plan-record file's raw bytes — identical on both OSes — and is
+  re-checked immediately before the write pass runs.
+- The gardener's push decision moved from an LLM instruction to
+  deterministic code: promotion, the backlog record, and the publish all
+  happen after the mechanical audit, never from inside the write pass.
+- `council relay` stops on an intermediate `VERDICT: REJECT` by default,
+  and verdict parsing is positional: only the response's last non-blank
+  line counts (markdown emphasis and terminal punctuation tolerated,
+  quoted verdicts ignored), so a cited rejection can no longer stop a
+  relay and an inline-explained verdict still counts as one.
+- `council`'s reasoning-effort forwarding and its display share one
+  source per CLI: `--think` for ollama (with `xhigh`/`max` downmapped to
+  `high`, labeled), `--variant` for opencode, and an explicit "(non
+  applicato da questa CLI)" for agy.
+- Every subprocess the sync control plane runs while holding the
+  host-wide lock now has a timeout (`schtasks`, `systemctl`, `mklink`,
+  `pgrep`/`tasklist`, `notify-send`) — the same hang class the 0.4.0
+  round fixed for the render/skills subprocesses.
+- `render.py` diff mode isolates a corrupted per-CLI config (whether it
+  fails parsing or reading): the other CLIs still get diffed, the run
+  still exits non-zero, and `agent-doctor` surfaces the actual STOP lines
+  instead of a generic last-line summary.
+- `skills-sync.py` warns on the aggregate size of Codex-targeted core
+  skills, not just per-file, since several under-threshold skills can
+  still defeat Codex's near-empty eager-scan discipline together.
+- `bootstrap-vps.sh` derives the SSH ports to allow from sshd's real
+  configuration (all of them), fixing the browser-console lockout case
+  where `SSH_CONNECTION` is unset and sshd listens on a custom port.
+- Shipped docs completed for a stranger on Windows: INIT/README document
+  the native entry point and the new-terminal-after-first-apply step;
+  AGENTS.md tells agents what to do when `vault-groom` is not yet linked;
+  `offline-emergency-mode.md` no longer hardcodes the maintainer's own
+  local model as universal fact.
 
 ### Fixed
 
-- `agent-doctor`'s "Tokens in env" check no longer fails a Local-Only
-  install permanently on `VAULT_LIBRARY_TOKEN`/`VAULT_LIBRARY_URL` — it
-  is now Mode-gated like every other connector.
-- `bootstrap-vps.sh`'s firewall step no longer aborts with a bare
-  "Permission denied" on Oracle Cloud's default non-root, no-sudo image;
-  it escalates via `sudo` when available and warns clearly when it
-  can't. Also allows the SSH port actually in use, not just the OpenSSH
-  profile.
-- `agent_sync.py` never actually wrote OpenCode's bootstrap-instructions
-  pointer into `opencode.json` — one of the 4 officially supported CLIs
-  had a permanently-failing doctor check with nothing that could ever
-  fix it.
-- The shipped policy files (`AGENTS.md`, `LOCAL-WORKER.md`, `GEMMA.md`)
-  carried the maintainer's own dogfooding into files every install
-  receives verbatim: a stray Italian phrase, a hardcoded personal
-  local-model name, a maintainer-specific GPU-contention detail. The
-  single highest-severity finding of the whole review, since these are
-  the first files a PMI evaluator reads to understand what they're
-  installing.
-- Five resilience gaps in the sync control plane: unprotected subprocess
-  calls inside the host-wide lock could hang it forever; `vault-push.sh`
-  ran without taking that same lock at all; the systemd install path
-  wrote timer units but never actually enabled them; three provisioning
-  phases could never report failure regardless of what went wrong
-  inside them; a non-UTF-8 alert config silently skipped the healthcheck
-  step whose job is warning about exactly that kind of problem.
-- `render.py --diff` no longer reports a corrupted (present but
-  unparseable) live config as "CLI not installed here" — it now stops
-  with the same explicit error every write path already uses.
-- `agent-doctor.ps1` was missing the Codex known-bad-version check
-  entirely; Windows users got no warning the Linux/Mac doctor already
-  gives for a known tool-dispatcher regression.
-- Stale `ghcr.io/mendableai/*` registry references in `.env.example` and
-  deploy docs, pointing at repos that no longer resolve.
-- `engine-tests-windows` CI: two bash-only test files were missing the
-  Windows skip pattern every sibling test already uses.
+- `agent-sync`, `agent-doctor`, `vault-groom` and `firecrawl-local` were
+  documented everywhere as bare PATH commands but never linked by any
+  code path on any OS — including the systemd guard timer's own
+  `ExecStart`, which depended on a symlink nothing created. All linked
+  now, from a single source of truth consumed by both OS branches of the
+  provisioner.
+- `vault_groom_audit.py` invoked `python3` by name to publish — broken on
+  stock Windows, where only `python` exists; it now uses the running
+  interpreter.
+- Three `Write-Error`-then-`exit` branches in `vault-groom.ps1` and one
+  in `vault-push.ps1` could never reach their exit codes under
+  `$ErrorActionPreference = 'Stop'`.
+- `vault-groom.ps1` no longer passes prompts through argv shapes a
+  cmd.exe shim can reparse (`|`, `<`, embedded newlines): runner commands
+  resolve to their `.ps1`/executable form, with a byte-intactness test.
+- One malformed name in `KNOWLEDGE_VAULT_MIRRORS` skips that mirror with
+  a warning instead of failing the whole push, matching the pre-port
+  behavior.
+- Kept from the earlier, pre-review cut of this section: `agent-doctor`'s
+  "Tokens in env" check Mode-gated for `vault-library`; OpenCode's
+  bootstrap-instructions pointer actually written; `bootstrap-vps.sh`
+  sudo escalation on Oracle's default image; maintainer dogfooding purged
+  from the shipped policy files; five resilience gaps in the sync control
+  plane (lock-holding subprocess hangs, `vault-push.sh` not taking the
+  lock, timer units written but never enabled, phases that could not
+  report failure, non-UTF-8 alert config skipping the healthcheck);
+  corrupted live config no longer reads as "CLI not installed"; the Codex
+  known-bad-version check ported to Windows; stale `ghcr.io/mendableai`
+  registry references; Windows CI skip patterns for two bash-only test
+  files.
 
 ## [0.4.0] - 2026-07-13
 
