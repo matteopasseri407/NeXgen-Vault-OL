@@ -16,7 +16,10 @@ set -euo pipefail
 VAULT="${AGENT_VAULT_DATA:-${VAULT:-$HOME/KnowledgeVault}}"
 PLAYBOOK="03-INFRA/vault-grooming-playbook.md"
 MODEL="${GROOM_MODEL:-claude-sonnet-5}"
-MODE="${1:-run}"
+# Default to the read-only lane. A first-time caller running `./vault-groom.sh`
+# with no argument must never land in commit+push mode driven by unreviewed
+# LLM judgement -- `run` (and its push) stays an explicit, deliberate choice.
+MODE="${1:-plan}"
 # mktemp, not a predictable timestamp name: a plain "tee > $LOG" onto a
 # guessable /tmp path is a symlink race (CWE-59) -- anything running as this
 # same user could pre-create a symlink at that name pointing at, say,

@@ -18,7 +18,10 @@
 
 param(
   [ValidateSet('plan', 'run')]
-  [string]$Mode = 'run'
+  # Default to the read-only lane, matching vault-groom.sh: a first-time
+  # caller with no argument must never land in commit+push mode driven by
+  # unreviewed LLM judgement -- `run` (and its push) stays an explicit choice.
+  [string]$Mode = 'plan'
 )
 $ErrorActionPreference = 'Stop'
 
