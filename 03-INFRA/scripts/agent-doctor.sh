@@ -114,7 +114,6 @@ if git -C "$VAULT" rev-parse >/dev/null 2>&1; then
     a=$(git -C "$VAULT" rev-list --count "$REMOTE/$BRANCH..$BRANCH" 2>/dev/null || echo '?')
     d=$(git -C "$VAULT" status --porcelain --untracked-files=no 2>/dev/null | wc -l | tr -d ' ')
     [ "$b" = 0 ] && ok "aligned with $REMOTE/$BRANCH (0 behind)" || fail "$b commits behind the cloud"
-    # TODO(2026-07-10): Alert per dangling commit (da riguardare in review)
     if [ "$a" = 0 ] || [ "$a" = "?" ]; then
       ok "no unpublished local commits"
     else

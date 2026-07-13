@@ -87,7 +87,6 @@ if (Test-Path -LiteralPath (Join-Path $Vault ".git")) {
     $a = (gitc @("rev-list","--count","$Remote/$Branch..$Branch")); if (-not $a) { $a = "?" }
     $d = @(gitc @("status","--porcelain","--untracked-files=no")).Where({ $_ }).Count
     if ("$b" -eq "0") { ok "aligned with $Remote/$Branch (0 behind)" } else { bad "$b commits behind the cloud" }
-    # TODO(2026-07-10): Alert per dangling commit (da riguardare in review)
     if ("$a" -eq "0" -or "$a" -eq "?") {
       ok "no unpublished local commits"
     } else {
@@ -394,6 +393,26 @@ if ((Get-Command "python" -ErrorAction SilentlyContinue) -and (Test-Path -Litera
   elseif ($pending -gt 0) { warn "skill drift: $pending pending actions from the manifest (skills-sync --apply)" }
   else { ok "skills aligned with the manifest (clean diff)" }
 } else { warn "python or skills-sync.py not available, skipping skill coverage" }
+
+# Third-party CLI compatibility: a short, pruneable list of known-broken
+# releases. NOT a general version pin -- only versions confirmed broken here
+# (verified live: every tool call, including a no-op, was rejected with
+# "unsupported call") get listed. Remove an entry once you've confirmed the
+# upstream release fixed it; this list is expected to go stale and shrink.
+# Same list as agent-doctor.sh -- was missing entirely from this file
+# (beta-readiness review, 2026-07-13), a Windows user got no warning at all
+# for a regression the Linux/Mac doctor already caught.
+sec "Third-party CLI compatibility"
+if (Get-Command codex -ErrorAction SilentlyContinue) {
+  $codexVerRaw = & codex --version 2>$null
+  $codexVer = ($codexVerRaw | Select-String -Pattern '\d+\.\d+\.\d+' | ForEach-Object { $_.Matches[0].Value } | Select-Object -First 1)
+  if ($codexVer -eq '0.143.0') {
+    bad "Codex CLI $codexVer has a known tool-dispatcher regression (every tool call is rejected as 'unsupported call') -- known-bad as of 2026-07-09, upgrade or downgrade past it. Check https://github.com/openai/codex/releases before assuming this is still accurate."
+  } elseif ($codexVer) {
+    ok "Codex CLI $codexVer (not in the known-bad list)"
+  }
+  # else: codex present but --version didn't parse a semver -- don't guess.
+}
 
 sec "OpenCode config"
 if (Test-Path -LiteralPath $OcJson) {
