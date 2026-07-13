@@ -123,6 +123,8 @@ You don't need to fill out configuration files manually.
 3. Paste its contents into a **filesystem-capable agent CLI** (Claude Code, Codex, OpenCode, Antigravity) opened in this folder, not a plain web chat (claude.ai / gemini), which cannot write files.
 4. The agent will ask how many CLIs and machines you have, your hardware, and your deployment mode, then configure the vault automatically.
 
+Prefer fewer questions and more autonomy? `AI-INSTALLER.md` is the same install with minimal back-and-forth: paste it instead of `INIT.md` and the agent runs the steps itself rather than interviewing you one question at a time.
+
 ## Prerequisites
 
 - Git
@@ -269,6 +271,8 @@ Non devi compilare i file di configurazione a mano.
 2. Apri `INIT.md`.
 3. Incolla il contenuto in una **CLI agentica capace di scrivere file** (Claude Code, Codex, OpenCode, Antigravity) aperta in questa cartella, non una chat web (claude.ai / gemini), che non può scrivere file.
 4. L'agente ti chiederà quante CLI e macchine hai, il tuo hardware e la modalità di deployment, poi configurerà il vault in automatico.
+
+Preferisci meno domande e più autonomia? `AI-INSTALLER.md` è la stessa installazione con il minimo indispensabile di domande: incollalo al posto di `INIT.md` e l'agente esegue i passi da solo invece di intervistarti uno alla volta.
 
 ## Prerequisiti
 
