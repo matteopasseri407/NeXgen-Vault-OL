@@ -58,6 +58,27 @@ done
 [ -z "$MSG" ] && { echo "vault-push: needs -m \"message\""; exit 2; }
 cd "$VAULT" || { echo "vault-push: vault not found ($VAULT)"; exit 1; }
 
+# Same host-wide lock file agent_sync.py's SyncRunLock uses (fcntl.flock on
+# the same path), acquired here via the flock(1) CLI so this bash script
+# and the Python provisioner never write the vault at the same time.
+# Without this, a `vault-push` running concurrently with an `agent-sync`
+# guard cycle could interleave a commit with a mid-apply working tree.
+# Best-effort, not a hard requirement: `flock` is standard on Linux
+# (util-linux) but not always present on macOS, so its absence degrades to
+# a loud warning rather than blocking every commit on a missing binary.
+LOCK_FILE="${AGENT_SYNC_LOCK_FILE:-$HOME/.local/state/agent-sync.lock}"
+LOCK_TIMEOUT="${AGENT_SYNC_LOCK_TIMEOUT_SECONDS:-2}"
+if command -v flock >/dev/null 2>&1; then
+  mkdir -p "$(dirname "$LOCK_FILE")"
+  exec 9>"$LOCK_FILE"
+  if ! flock -w "$LOCK_TIMEOUT" 9; then
+    echo "vault-push: sync lock busy (another agent-sync/vault-push is running) -- aborting" >&2
+    exit 75
+  fi
+else
+  echo "vault-push: WARNING - 'flock' not found, proceeding WITHOUT the cross-process sync lock" >&2
+fi
+
 # Local-Only sentinel (same "local"/"none" values agent_sync.py's publish()
 # already special-cases): no remote is ever meant to exist, so skip the
 # "is it configured" check below instead of failing on a git remote that

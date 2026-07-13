@@ -293,6 +293,115 @@ def test_real_wrong_branch_blocks_guard_before_runtime_mutation(sandbox):
     assert "pull: blocked (current branch is offline-work, expected main)" in log
 
 
+# ── Remaining PullState coverage on real git (beta-readiness review,
+# 2026-07-13) ───────────────────────────────────────────────────────────
+# FRESH/LOCAL_ONLY/WRONG_BRANCH/DIRTY/FETCH_FAILED already had real-git
+# coverage above; AHEAD, DIVERGED, REMOTE_MISSING and ERROR (the most
+# dangerous one -- it blocks an automatic merge on ambiguous history) had
+# none, only mocked pull() returns for DIRTY/FETCH_FAILED elsewhere. These
+# call pull() directly (not through guard/apply) since triggering AHEAD/
+# DIVERGED/ERROR needs precise git history shaping that a full CLI run
+# would otherwise obscure behind unrelated phase output.
+
+def _env_for(sandbox, monkeypatch, mod, **overrides):
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+    for key, value in overrides.items():
+        monkeypatch.setenv(key, value)
+    return mod.Env()
+
+
+def test_pull_reports_ahead_when_local_has_unpushed_commits(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    _init_git_vault(sandbox, "oracle")
+    (sandbox.vault / "local-only-commit.txt").write_text("ahead\n", encoding="utf-8")
+    _git(sandbox.vault, "add", "local-only-commit.txt")
+    _git(sandbox.vault, "commit", "-m", "local commit never pushed")
+    env = _env_for(sandbox, monkeypatch, mod, KNOWLEDGE_VAULT_REMOTE="oracle")
+
+    outcome = mod.pull(env)
+
+    assert outcome.state == mod.PullState.AHEAD
+    assert not outcome.allows_apply
+
+
+def test_pull_reports_diverged_on_real_conflicting_history(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    remotes = _init_git_vault(sandbox, "oracle")
+    # Diverge: a second clone pushes a commit the local checkout never sees,
+    # while the local checkout ALSO commits something of its own on top of
+    # the same shared ancestor -- neither is a fast-forward of the other.
+    other_clone = sandbox.home / "other-clone"
+    # --branch main explicitly: the bare remote's own HEAD symref (set by
+    # `git init --bare` before any push ever named "main") is not
+    # guaranteed to point at "main", so a plain clone can fail to check out
+    # any branch at all ("remote HEAD refers to nonexistent ref").
+    subprocess.run(
+        ["git", "clone", "--branch", "main", str(remotes["oracle"]), str(other_clone)],
+        check=True, capture_output=True,
+    )
+    _git(other_clone, "config", "user.email", "nexgen-tests.invalid")
+    _git(other_clone, "config", "user.name", "NeXgen tests")
+    (other_clone / "remote-side-commit.txt").write_text("remote diverges\n", encoding="utf-8")
+    _git(other_clone, "add", "remote-side-commit.txt")
+    _git(other_clone, "commit", "-m", "remote-side commit")
+    _git(other_clone, "push", "origin", "main")  # `git clone` names it origin, not oracle
+    (sandbox.vault / "local-side-commit.txt").write_text("local diverges\n", encoding="utf-8")
+    _git(sandbox.vault, "add", "local-side-commit.txt")
+    _git(sandbox.vault, "commit", "-m", "local-side commit")
+    env = _env_for(sandbox, monkeypatch, mod, KNOWLEDGE_VAULT_REMOTE="oracle")
+
+    outcome = mod.pull(env)
+
+    assert outcome.state == mod.PullState.DIVERGED
+    assert not outcome.allows_apply
+
+
+def test_pull_reports_remote_missing_when_configured_remote_was_never_added(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    _init_git_vault(sandbox)  # no remotes at all
+    env = _env_for(sandbox, monkeypatch, mod, KNOWLEDGE_VAULT_REMOTE="oracle")
+
+    outcome = mod.pull(env)
+
+    assert outcome.state == mod.PullState.REMOTE_MISSING
+    assert not outcome.allows_apply
+
+
+def test_pull_reports_error_on_unrelated_histories(sandbox, monkeypatch):
+    """Local `main` and `oracle/main` both exist and both fetch/rev-parse
+    fine (so neither FETCH_FAILED nor a rev-parse failure fires first) --
+    but they share no common ancestor, so `git merge-base` itself fails.
+    The one ERROR path this suite had never exercised for real: local and
+    remote history that genuinely cannot be compared, not merely blocked."""
+    mod = load_agent_sync_module(sandbox)
+    subprocess.run(["git", "init", "-b", "main", str(sandbox.vault)], check=True, capture_output=True)
+    _git(sandbox.vault, "config", "user.email", "nexgen-tests.invalid")
+    _git(sandbox.vault, "config", "user.name", "NeXgen tests")
+    _git(sandbox.vault, "add", ".")
+    _git(sandbox.vault, "commit", "-m", "local, unrelated history")
+
+    unrelated_remote = sandbox.home / "oracle.git"
+    unrelated_seed = sandbox.home / "unrelated-seed"
+    subprocess.run(["git", "init", "-b", "main", str(unrelated_seed)], check=True, capture_output=True)
+    _git(unrelated_seed, "config", "user.email", "nexgen-tests.invalid")
+    _git(unrelated_seed, "config", "user.name", "NeXgen tests")
+    (unrelated_seed / "seed.txt").write_text("completely separate repo\n", encoding="utf-8")
+    _git(unrelated_seed, "add", "seed.txt")
+    _git(unrelated_seed, "commit", "-m", "remote, unrelated history")
+    subprocess.run(["git", "init", "--bare", str(unrelated_remote)], check=True, capture_output=True)
+    _git(unrelated_seed, "remote", "add", "origin", str(unrelated_remote))
+    _git(unrelated_seed, "push", "origin", "main")
+
+    _git(sandbox.vault, "remote", "add", "oracle", str(unrelated_remote))
+    env = _env_for(sandbox, monkeypatch, mod, KNOWLEDGE_VAULT_REMOTE="oracle")
+
+    outcome = mod.pull(env)
+
+    assert outcome.state == mod.PullState.ERROR
+    assert not outcome.allows_apply
+
+
 def test_publish_blocks_when_local_branch_is_behind_authoritative_remote(sandbox):
     remotes = _init_git_vault(sandbox, "oracle")
     writer = sandbox.home / "other-writer"
@@ -397,6 +506,36 @@ seats:
 
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert not (sandbox.vault / "99-INDEX" / "DATA-SCHEMA-VERSION.txt").exists()
+
+
+# ── Timeout on Python-helper subprocess calls inside the sync lock
+# (beta-readiness review, 2026-07-13) ──────────────────────────────────────
+# mcp_render()/skills_index()/preflight() called render.py/skills-sync.py
+# with no timeout=, all three from inside `with SyncRunLock(...)`: a hang in
+# any of them held the host-wide lock forever, silently, with no logged
+# error (the guard timer would just never complete). _run_python_script()
+# centralizes the fix.
+
+def test_run_python_script_times_out_instead_of_hanging(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    hang_script = sandbox.home / "hang.py"
+    hang_script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+
+    result = mod._run_python_script([sys.executable, str(hang_script)], timeout=1)
+
+    assert result.returncode != 0
+    assert "timed out after 1s" in result.stderr
+
+
+def test_run_python_script_returns_real_output_on_success(sandbox):
+    mod = load_agent_sync_module(sandbox)
+    ok_script = sandbox.home / "ok.py"
+    ok_script.write_text("print('hello')\n", encoding="utf-8")
+
+    result = mod._run_python_script([sys.executable, str(ok_script)], timeout=10)
+
+    assert result.returncode == 0
+    assert "hello" in result.stdout
 
 
 # ── OpenCode instructions pointer (beta-readiness review, 2026-07-13) ─────
@@ -861,3 +1000,29 @@ def test_systemd_service_content_emits_quoted_environment_lines(sandbox, monkeyp
     # No unquoted Environment= line should slip through for these two keys.
     assert "Environment=AGENT_ENGINE_ROOT=" not in content
     assert "Environment=AGENT_VAULT_DATA=" not in content
+
+
+# ── creds_health() resilience to a malformed alert conf (beta-readiness
+# review, 2026-07-13) ────────────────────────────────────────────────────
+# _ensure_alert_creds() and _send_healthcheck() were both individually
+# wrapped in try/except inside creds_health(), but _load_env_conf() sat
+# bare between them: a non-UTF-8 91-telegram-alert.conf (a stray binary
+# write, a bad manual edit) raised UnicodeDecodeError uncaught, which
+# skipped _send_healthcheck entirely -- the one step in this function whose
+# whole job is telling the user something is wrong.
+
+def test_creds_health_survives_a_non_utf8_alert_conf_and_still_runs_healthcheck(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+    conf_dir = sandbox.home / ".config" / "environment.d"
+    conf_dir.mkdir(parents=True, exist_ok=True)
+    (conf_dir / "91-telegram-alert.conf").write_bytes(b"\xff\xfe\x00garbage-not-utf8")
+
+    healthcheck_called = []
+    monkeypatch.setattr(mod, "_send_healthcheck", lambda _env: healthcheck_called.append(True))
+    env = mod.Env()
+
+    mod.creds_health(env, do_creds=False, do_health=True)  # must not raise
+
+    assert healthcheck_called, "_load_env_conf failing must not skip _send_healthcheck"

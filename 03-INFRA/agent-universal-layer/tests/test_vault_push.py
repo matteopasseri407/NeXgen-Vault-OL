@@ -184,3 +184,66 @@ def test_vault_push_rejects_invalid_remote_policy_before_commit(sandbox):
     assert proc.returncode == 2
     assert _git(sandbox.vault, "rev-parse", "HEAD").stdout.strip() == before
     assert _git(sandbox.vault, "diff", "--cached", "--name-only").stdout == ""
+
+
+# ── Shared sync lock with agent_sync.py (beta-readiness review, 2026-07-13)
+# ───────────────────────────────────────────────────────────────────────
+# vault-push.sh used no lock at all: it could run concurrently with an
+# agent-sync guard cycle (SyncRunLock, same fcntl.flock mechanism) and
+# interleave a commit with a mid-apply working tree. It now flocks the
+# SAME lock file agent_sync.py uses (fcntl.flock on the same path is a
+# cooperative, cross-process lock -- the C library call underneath both
+# Python's fcntl module and the flock(1) CLI is identical).
+
+def test_vault_push_blocked_while_sync_lock_is_held(sandbox):
+    import fcntl
+
+    _init_repo(sandbox)
+    before = _git(sandbox.vault, "rev-parse", "HEAD").stdout.strip()
+    target = sandbox.vault / "note.txt"
+    target.write_text("should not be committed\n", encoding="utf-8")
+
+    lock_file = sandbox.home / "agent-sync.lock"
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    fh = lock_file.open("a+b")
+    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    try:
+        env = sandbox.env()
+        env["KNOWLEDGE_VAULT_REMOTE"] = "local"
+        env["AGENT_SYNC_LOCK_FILE"] = str(lock_file)
+        env["AGENT_SYNC_LOCK_TIMEOUT_SECONDS"] = "0.3"
+
+        proc = subprocess.run(
+            ["bash", str(sandbox.scripts_dir / "vault-push.sh"), "-m", "must not commit",
+             str(target.relative_to(sandbox.vault))],
+            env=env, capture_output=True, text=True, timeout=30,
+        )
+    finally:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fh.close()
+
+    assert proc.returncode == 75, proc.stdout + proc.stderr
+    assert "sync lock busy" in proc.stderr
+    assert _git(sandbox.vault, "rev-parse", "HEAD").stdout.strip() == before
+
+
+def test_vault_push_proceeds_once_sync_lock_is_free(sandbox):
+    _init_repo(sandbox)
+    before = _git(sandbox.vault, "rev-parse", "HEAD").stdout.strip()
+    target = sandbox.vault / "note.txt"
+    target.write_text("free to commit\n", encoding="utf-8")
+
+    lock_file = sandbox.home / "agent-sync.lock"
+    env = sandbox.env()
+    env["KNOWLEDGE_VAULT_REMOTE"] = "local"
+    env["AGENT_SYNC_LOCK_FILE"] = str(lock_file)
+
+    proc = subprocess.run(
+        ["bash", str(sandbox.scripts_dir / "vault-push.sh"), "-m", "free commit",
+         str(target.relative_to(sandbox.vault))],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert lock_file.exists(), "vault-push should create/use the shared lock file even on success"
+    assert _git(sandbox.vault, "rev-parse", "HEAD").stdout.strip() != before

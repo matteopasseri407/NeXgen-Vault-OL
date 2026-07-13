@@ -481,6 +481,24 @@ def _git(env: Env, *args: str, timeout: int = 30) -> subprocess.CompletedProcess
         return subprocess.CompletedProcess(args, 1, "", str(exc))
 
 
+def _run_python_script(args: list[str], *, timeout: int = 60) -> subprocess.CompletedProcess:
+    """subprocess.run for a Python helper script (render.py, skills-sync.py)
+    invoked from phases that run inside the host-wide sync lock: a hang here
+    must never hold that lock forever (the risk `_git`'s own timeout= above
+    already guards against for git itself). TimeoutExpired is caught and
+    turned into a synthetic non-zero CompletedProcess, matching `_git`'s own
+    pattern, so every call site's existing "non-zero exit code -> best-
+    effort, continue" handling covers a timeout too -- without this, the
+    exception would propagate out of a for-loop mid-iteration (mcp_render
+    renders 4 CLIs in one loop) and silently skip whatever the loop had
+    left to do, not just the one CLI that actually hung."""
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", "replace")
+        return subprocess.CompletedProcess(args, 1, stdout, f"timed out after {timeout}s")
+
+
 class SyncRunLock:
     """Small standard-library cross-platform lock for the whole sync run."""
 
@@ -644,11 +662,7 @@ def preflight(env: Env) -> bool:
     if not skills_sync.is_file():
         env.log(f"preflight: missing skills validator {skills_sync}")
         return False
-    result = subprocess.run(
-        [sys.executable, str(skills_sync), "--validate"],
-        capture_output=True,
-        text=True,
-    )
+    result = _run_python_script([sys.executable, str(skills_sync), "--validate"])
     _append_log(env, result.stdout, result.stderr)
     if result.returncode != 0:
         env.log("preflight: skills manifest or local source is invalid")
@@ -810,10 +824,10 @@ def _sync_opencode_instructions(env: Env, canon: Path) -> None:
 # Antigravity's other config paths. Not a second generator: render.py is the
 # single source of truth, this section is pure fan-out via symlink/junction.
 
-def antigravity_mcp(env: Env) -> None:
+def antigravity_mcp(env: Env) -> bool:
     src = env.home / ".gemini" / "antigravity" / "mcp_config.json"
     if not src.is_file():
-        return
+        return True
     for target in (
         env.home / ".gemini" / "antigravity-cli" / "mcp_config.json",
         env.home / ".gemini" / "antigravity-ide" / "mcp_config.json",
@@ -827,45 +841,65 @@ def antigravity_mcp(env: Env) -> None:
             continue
         make_link(src, target, is_dir=False)
         env.log(f"mcp: relinked {target}")
+    return True
 
 
 # ── 2.7 utils ────────────────────────────────────────────────────────────
 
-def _link_util(src: Path, dst: Path, env: Env, label: str) -> None:
+def _link_util(src: Path, dst: Path, env: Env, label: str, *, optional: bool = False) -> bool:
     if not src.is_file():
-        return
+        if optional:
+            # Documented as bring-your-own, same as local-model-agent.ps1
+            # (LOCAL-WORKER.md) and the semantic-search backend (README):
+            # vault-ocr-local.sh is referenced by AGENTS.md/vault-ocr.md but
+            # never actually shipped in 03-INFRA/scripts -- verified absent
+            # from `git ls-files`, not a sandbox/test-fixture artifact.
+            # Absence here is the documented default, not a failure.
+            env.log(f"utils: missing source {src} (optional, bring-your-own)")
+            return True
+        # A missing REQUIRED source means the engine checkout itself is
+        # incomplete -- a real problem, not a benign not-applicable case.
+        env.log(f"utils: missing source {src}")
+        return False
     if not IS_WINDOWS and not (src.stat().st_mode & 0o111):
         env.log(f"utils: source {src} is not executable, refusing to mutate an engine source")
-        return
+        return False
     try:
         same = dst.is_symlink() and dst.resolve() == src.resolve()
     except OSError:
         same = False
     if same:
-        return
+        return True
     make_link(src, dst, is_dir=False)
     env.log(f"utils: relinked {label}")
+    return True
 
 
-def utils(env: Env) -> None:
+def utils(env: Env) -> bool:
     env.local_bin.mkdir(parents=True, exist_ok=True)
     skill_source = env.engine_scripts / "agent-skill.py"
     if not IS_WINDOWS:
-        _link_util(env.engine_scripts / "agent-now.sh", env.local_bin / "agent-now", env, "agent-now")
-        _link_util(env.engine_scripts / "council.sh", env.local_bin / "council", env, "council")
-        _link_util(env.vault_scripts / "vault-push.sh", env.local_bin / "vault-push", env, "vault-push")
-        _link_util(env.vault_scripts / "vault-ocr-local.sh", env.local_bin / "vault-ocr-local", env, "vault-ocr-local")
+        healthy = True
+        healthy = _link_util(env.engine_scripts / "agent-now.sh", env.local_bin / "agent-now", env, "agent-now") and healthy
+        healthy = _link_util(env.engine_scripts / "council.sh", env.local_bin / "council", env, "council") and healthy
+        healthy = _link_util(env.vault_scripts / "vault-push.sh", env.local_bin / "vault-push", env, "vault-push") and healthy
+        healthy = _link_util(env.vault_scripts / "vault-ocr-local.sh", env.local_bin / "vault-ocr-local", env, "vault-ocr-local", optional=True) and healthy
         if skill_source.is_file():
             wrapper = f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(skill_source))} \"$@\"\n"
             target = env.local_bin / "agent-skill"
             if _write_if_different(target, wrapper):
                 env.log("utils: installed agent-skill")
             target.chmod(0o755)
-        return
+        else:
+            env.log(f"utils: missing source {skill_source}")
+            healthy = False
+        return healthy
+    healthy = True
     for name in ("agent-now", "council"):
         src = env.engine_scripts / f"{name}.ps1"
         if not src.is_file():
             env.log(f"utils: missing source {src}")
+            healthy = False
             continue
         dst = env.local_bin / f"{name}.ps1"
         try:
@@ -888,15 +922,22 @@ def utils(env: Env) -> None:
         )
         if _write_if_different(env.local_bin / "agent-skill.cmd", wrapper):
             env.log("utils: installed agent-skill.cmd")
+    else:
+        env.log(f"utils: missing source {skill_source}")
+        healthy = False
+    return healthy
 
 
-def local_model_runtime(env: Env) -> None:
+def local_model_runtime(env: Env) -> bool:
     if not IS_WINDOWS:
-        return
+        return True
     src = env.engine_scripts / "local-model-agent.ps1"
     if not src.is_file():
-        env.log(f"local-model: missing source {src}")
-        return
+        # Not shipped in the public engine by design (bring-your-own, see
+        # LOCAL-WORKER.md) -- absence is the expected default for most
+        # installs, not a failure to surface as a red exit code.
+        env.log(f"local-model: missing source {src} (optional, bring-your-own)")
+        return True
     env.local_bin.mkdir(parents=True, exist_ok=True)
     runtime = env.local_bin / "local-model-agent.ps1"
     if make_link(src, runtime, is_dir=False):
@@ -916,6 +957,7 @@ def local_model_runtime(env: Env) -> None:
         changed = _write_if_different(env.local_bin / name, content) or changed
     if changed:
         env.log("local-model: installed runtime shims")
+    return True
 
 
 # ── 2.75 scheduler ───────────────────────────────────────────────────────
@@ -971,10 +1013,11 @@ WantedBy=timers.target
 """
 
 
-def _install_systemd_units(env: Env) -> None:
+def _install_systemd_units(env: Env) -> bool:
     unit_dir = env.home / ".config" / "systemd" / "user"
     unit_dir.mkdir(parents=True, exist_ok=True)
     changed = False
+    healthy = True
     for path, content, label in (
         (unit_dir / "agent-sync.service", _systemd_service_content(env), "agent-sync.service set to pull mode"),
         (unit_dir / "agent-sync.timer", _SYSTEMD_TIMER, "agent-sync.timer updated"),
@@ -990,10 +1033,32 @@ def _install_systemd_units(env: Env) -> None:
         _atomic_write_text(path, content)
         changed = True
         env.log(f"systemd: {label}")
-    if changed and resolve_cmd("systemctl"):
+    if not resolve_cmd("systemctl"):
+        env.log("systemd: systemctl not found -- unit files written but not enabled")
+        return healthy
+    if changed:
         r = subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, text=True)
         if r.returncode != 0:
-            env.log("systemd: user daemon-reload failed (best-effort)")
+            env.log(f"systemd: user daemon-reload failed: {(r.stderr or r.stdout).strip()}")
+            healthy = False
+    # Unconditional, not gated on `changed`: writing the unit files was never
+    # enough on its own -- systemd requires an explicit `enable` to create
+    # the timers.target.wants/ symlink that actually makes the timer fire.
+    # This call was missing entirely before (beta-readiness review,
+    # 2026-07-13): a fresh install wrote inert unit files that never ran
+    # unless a human happened to `systemctl --user enable` them by hand.
+    # --now also starts it immediately rather than waiting for next login.
+    r = subprocess.run(["systemctl", "--user", "enable", "--now", "agent-sync.timer"],
+                        capture_output=True, text=True)
+    if r.returncode != 0:
+        env.log(
+            "systemd: could not enable agent-sync.timer "
+            f"({(r.stderr or r.stdout).strip()}) -- the recurring guard will not run. "
+            "On a headless/SSH-only box this is often a missing "
+            "`loginctl enable-linger $USER` (lets --user units run without an active login session)."
+        )
+        healthy = False
+    return healthy
 
 
 _VBS_TEMPLATE = (
@@ -1004,7 +1069,7 @@ _VBS_TEMPLATE = (
 )
 
 
-def _install_scheduled_task(env: Env) -> None:
+def _install_scheduled_task(env: Env) -> bool:
     task_name = "KnowledgeVault Agent Sync"
     script_path = env.engine_scripts / "agent-sync.ps1"
     wrapper_path = env.engine_scripts / "start-agent-sync-hidden.vbs"
@@ -1017,12 +1082,15 @@ def _install_scheduled_task(env: Env) -> None:
     r = subprocess.run(every30, capture_output=True, text=True)
     if r.returncode != 0:
         env.log(f"scheduled-task: schtasks.exe failed for '{task_name}': {r.stdout}{r.stderr}")
-        return
+        # The every-30-minutes task IS the recurring guard; without it there
+        # is no self-healing trigger at all, unlike the logon trigger below
+        # (a redundant nicety the every-30 task already covers within 30min).
+        return False
     env.log(f"scheduled-task: installed/updated '{task_name}' via schtasks.exe")
     r = subprocess.run(logon, capture_output=True, text=True)
     if r.returncode == 0:
         env.log(f"scheduled-task: installed/updated '{task_name} Logon' via schtasks.exe")
-        return
+        return True
     env.log(f"scheduled-task: logon trigger failed via schtasks.exe ({r.stdout}{r.stderr})")
     startup_dir = os.environ.get("APPDATA")
     if startup_dir:
@@ -1030,13 +1098,13 @@ def _install_scheduled_task(env: Env) -> None:
         startup_vbs.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(wrapper_path, startup_vbs)
         env.log(f"startup: installed hidden logon fallback {startup_vbs}")
+    return True
 
 
-def install_scheduler(env: Env) -> None:
+def install_scheduler(env: Env) -> bool:
     if IS_WINDOWS:
-        _install_scheduled_task(env)
-    else:
-        _install_systemd_units(env)
+        return _install_scheduled_task(env)
+    return _install_systemd_units(env)
 
 
 # ── 2.8 mcp_render ───────────────────────────────────────────────────────
@@ -1055,7 +1123,7 @@ def mcp_render(env: Env) -> bool:
         return False
     healthy = True
     for cli in ("opencode", "antigravity", "codex"):
-        r = subprocess.run([sys.executable, str(render_path), "--write", cli], capture_output=True, text=True)
+        r = _run_python_script([sys.executable, str(render_path), "--write", cli])
         _append_log(env, r.stdout, r.stderr)
         if r.returncode == 0:
             env.log(f"mcp-gen: {cli} aligned with the manifest")
@@ -1068,7 +1136,7 @@ def mcp_render(env: Env) -> bool:
     if _process_running("claude"):
         env.log("mcp-gen: claude ACTIVE -> not touching .claude.json live (sentinel only)")
     else:
-        r = subprocess.run([sys.executable, str(render_path), "--write", "claude"], capture_output=True, text=True)
+        r = _run_python_script([sys.executable, str(render_path), "--write", "claude"])
         _append_log(env, r.stdout, r.stderr)
         if r.returncode == 0:
             env.log("mcp-gen: claude aligned (was closed)")
@@ -1078,7 +1146,7 @@ def mcp_render(env: Env) -> bool:
             env.log("mcp-gen: claude not aligned (best-effort)")
             healthy = False
 
-    diag = subprocess.run([sys.executable, str(render_path)], capture_output=True, text=True)
+    diag = _run_python_script([sys.executable, str(render_path)])
     if diag.returncode != 0:
         _append_log(env, diag.stdout, diag.stderr)
         env.log("mcp-gen: final drift diagnostic failed")
@@ -1131,7 +1199,7 @@ def skills_index(env: Env) -> bool:
     if not skills_sync.is_file():
         env.log(f"skills-manifest: missing synchronizer {skills_sync}")
         return False
-    r = subprocess.run([sys.executable, str(skills_sync), "--apply"], capture_output=True, text=True)
+    r = _run_python_script([sys.executable, str(skills_sync), "--apply"])
     if r.returncode == 0:
         summary = next((ln for ln in r.stdout.splitlines() if "Total:" in ln), "")
         summary = re.sub(r"\x1b\[[0-9;]*m", "", summary).strip()
@@ -1447,7 +1515,14 @@ def creds_health(env: Env, *, do_creds: bool, do_health: bool) -> None:
         except Exception as exc:
             env.log(f"alert-creds: provisioning failed ({exc})")
     if do_health:
-        _load_env_conf(env)
+        try:
+            _load_env_conf(env)
+        except Exception as exc:
+            # Same resilience as _ensure_alert_creds/_send_healthcheck right
+            # above/below: a malformed or non-UTF-8 conf file (a stray binary
+            # write, a bad manual edit) must not skip _send_healthcheck
+            # entirely by letting the exception propagate past it unguarded.
+            env.log(f"alert-creds: 91-telegram-alert.conf unreadable, skipping ({exc})")
         try:
             _send_healthcheck(env)
         except Exception as exc:
