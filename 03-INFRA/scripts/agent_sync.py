@@ -68,6 +68,9 @@ HELP_TEXT = """agent_sync modes:
   doctor   Run healthcheck/alerts only.
   bootstrap-alerts  Provision optional alert credentials and run healthcheck.
   config FIELD  Print resolved sync data. FIELD is authoritative_remote or mirrors.
+  vault-push -m MSG [file ...]  Commit (+ stage given files) and publish the
+    vault's infra files to the authoritative remote, then its mirrors. See
+    docs/sync-contract.md and vault-write-architecture.md.
 
 Default without arguments: help only, no writes.
 The recurring timer/scheduled task should use: agent_sync.py guard
@@ -121,6 +124,33 @@ def _parse_mirrors(value: object, source: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(_validate_remote_name(item, source) for item in items))
 
 
+def _parse_mirrors_lenient(value: object, source: str) -> tuple[str, ...]:
+    """Same shape as _parse_mirrors, for the KNOWLEDGE_VAULT_MIRRORS
+    emergency/bootstrap override only: one malformed entry is skipped with
+    a warning instead of failing the whole config load. The data-owned
+    remotes.yaml path keeps using the strict _parse_mirrors above -- a typo
+    there is a real config bug worth stopping on. An ad-hoc env var typed
+    by hand during an actual emergency must never brick the authoritative
+    push over one bad mirror name (old vault-push.sh's behavior, restored
+    here)."""
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",") if item.strip()]
+    elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+        items = [item.strip() for item in value if item.strip()]
+    else:
+        print(f"vault-push: {source} mirrors must be a list of strings; ignoring KNOWLEDGE_VAULT_MIRRORS", file=sys.stderr)
+        return ()
+    valid: list[str] = []
+    for item in items:
+        try:
+            valid.append(_validate_remote_name(item, source))
+        except RemoteConfigError as exc:
+            print(f"vault-push: {exc} -- skipping this mirror", file=sys.stderr)
+    return tuple(dict.fromkeys(valid))
+
+
 def load_remote_config(*, home: Path | None = None, vault_data: Path | None = None) -> RemoteConfig:
     """Resolve the authoritative Vault remote before any runtime mutation.
 
@@ -131,7 +161,7 @@ def load_remote_config(*, home: Path | None = None, vault_data: Path | None = No
     env_remote = os.environ.get("KNOWLEDGE_VAULT_REMOTE", "").strip()
     if env_remote:
         env_remote = _validate_remote_name(env_remote, "environment")
-        mirrors = _parse_mirrors(os.environ.get("KNOWLEDGE_VAULT_MIRRORS"), "environment")
+        mirrors = _parse_mirrors_lenient(os.environ.get("KNOWLEDGE_VAULT_MIRRORS"), "environment")
         mirrors = tuple(item for item in mirrors if item != env_remote)
         return RemoteConfig(env_remote, mirrors, "environment")
 
@@ -376,8 +406,8 @@ def make_link(src: Path, dst: Path, *, is_dir: bool) -> bool:
         # operator. Do not "fix" this blind with hand-rolled quoting; a
         # wrong escaping scheme is its own bug and this needs a real
         # Windows run to confirm behavior before changing it.
-        r = subprocess.run(["cmd", "/c", "mklink", "/J", str(dst), str(src)],
-                            capture_output=True, text=True)
+        r = _run_external(["cmd", "/c", "mklink", "/J", str(dst), str(src)],
+                           timeout=15, capture_output=True, text=True)
         if r.returncode == 0:
             return True
         shutil.copytree(src, dst)
@@ -413,9 +443,9 @@ def _process_running(name: str) -> bool:
     # guess (e.g. matching any node.exe) would create a worse false positive.
     try:
         if not IS_WINDOWS:
-            r = subprocess.run(["pgrep", "-x", name], capture_output=True)
+            r = _run_external(["pgrep", "-x", name], timeout=15, capture_output=True)
             return r.returncode == 0
-        r = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}.exe"], capture_output=True, text=True)
+        r = _run_external(["tasklist", "/FI", f"IMAGENAME eq {name}.exe"], timeout=15, capture_output=True, text=True)
         return name.lower() in r.stdout.lower()
     except (OSError, FileNotFoundError):
         return False
@@ -494,6 +524,21 @@ def _run_python_script(args: list[str], *, timeout: int = 60) -> subprocess.Comp
     left to do, not just the one CLI that actually hung."""
     try:
         return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", "replace")
+        return subprocess.CompletedProcess(args, 1, stdout, f"timed out after {timeout}s")
+
+
+def _run_external(args: list[str], *, timeout: int, **kw) -> subprocess.CompletedProcess:
+    """subprocess.run for a short-lived external tool (mklink, pgrep,
+    tasklist, systemctl, schtasks.exe, notify-send) invoked from phases that
+    run inside the host-wide sync lock: same TimeoutExpired-swallowing
+    pattern as _run_python_script above, so a hung external command degrades
+    to a non-zero CompletedProcess (every call site already treats rc!=0 as
+    "best-effort, log, continue") instead of holding the lock -- or the
+    whole run -- forever."""
+    try:
+        return subprocess.run(args, timeout=timeout, **kw)
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", "replace")
         return subprocess.CompletedProcess(args, 1, stdout, f"timed out after {timeout}s")
@@ -845,6 +890,40 @@ def antigravity_mcp(env: Env) -> bool:
 
 
 # ── 2.7 utils ────────────────────────────────────────────────────────────
+# LINKED_COMMANDS is the single source for every bare command utils() puts
+# on PATH -- both the POSIX (symlink onto a *.sh twin) and Windows (relink a
+# *.ps1 twin + write a *.cmd wrapper) branches below consume the SAME dict
+# instead of each carrying their own hardcoded list. Real bug history this
+# closes (2026-07-13 review, four separate commits over the same root
+# cause): agent-sync, agent-doctor, vault-groom and firecrawl-local were all
+# documented everywhere as bare commands while nothing ever actually linked
+# them -- a hardcoded list in one branch is exactly the kind of place a new
+# command silently falls through the cracks of.
+#   source:   'engine' -> env.engine_scripts, 'vault' -> env.vault_scripts.
+#   posix/windows: whether a same-named <name>.sh / <name>.ps1 twin ships
+#     and should be linked on that OS (firecrawl-local and vault-ocr-local
+#     are POSIX-only by design, no .ps1 twin ships).
+#   optional: bring-your-own -- absence of the source is the documented
+#     default, not a failure (see _link_util below).
+# agent-skill is deliberately NOT here: utils() generates its wrapper from a
+# template at write time (there is no agent-skill.sh/.ps1 twin to symlink),
+# a different enough shape that folding it into this table would obscure
+# rather than simplify it.
+LINKED_COMMANDS: dict[str, dict[str, object]] = {
+    "agent-sync":      {"source": "engine", "posix": True,  "windows": True},
+    "agent-doctor":    {"source": "engine", "posix": True,  "windows": True},
+    "agent-now":       {"source": "engine", "posix": True,  "windows": True},
+    "council":         {"source": "engine", "posix": True,  "windows": True},
+    "firecrawl-local": {"source": "engine", "posix": True,  "windows": False},
+    "vault-push":      {"source": "vault",  "posix": True,  "windows": True},
+    "vault-groom":     {"source": "vault",  "posix": True,  "windows": True},
+    "vault-ocr-local": {"source": "vault",  "posix": True,  "windows": False, "optional": True},
+}
+
+
+def _linked_command_src_dir(env: Env, source: str) -> Path:
+    return env.engine_scripts if source == "engine" else env.vault_scripts
+
 
 def _link_util(src: Path, dst: Path, env: Env, label: str, *, optional: bool = False) -> bool:
     if not src.is_file():
@@ -890,20 +969,13 @@ def utils(env: Env) -> bool:
         # guard', which pointed at a symlink no code path ever created; and
         # _persisted_engine_root() reads that same symlink to detect an
         # existing engine-root cutover, silently dead for anyone who never
-        # got a working one. Same bug class as vault-groom/firecrawl-local
-        # (2026-07-13 review), just not caught in that pass.
-        healthy = _link_util(env.engine_scripts / "agent-sync.sh", env.local_bin / "agent-sync", env, "agent-sync") and healthy
-        healthy = _link_util(env.engine_scripts / "agent-doctor.sh", env.local_bin / "agent-doctor", env, "agent-doctor") and healthy
-        healthy = _link_util(env.engine_scripts / "agent-now.sh", env.local_bin / "agent-now", env, "agent-now") and healthy
-        healthy = _link_util(env.engine_scripts / "council.sh", env.local_bin / "council", env, "council") and healthy
-        # Linux/Mac only by design (no .ps1 twin ships) -- README/AGENTS.md/
-        # firecrawl.md all document it as a bare command; it was never
-        # actually wired here, same bug class the 2026-07-13 review found on
-        # vault-groom.
-        healthy = _link_util(env.engine_scripts / "firecrawl-local.sh", env.local_bin / "firecrawl-local", env, "firecrawl-local") and healthy
-        healthy = _link_util(env.vault_scripts / "vault-push.sh", env.local_bin / "vault-push", env, "vault-push") and healthy
-        healthy = _link_util(env.vault_scripts / "vault-groom.sh", env.local_bin / "vault-groom", env, "vault-groom") and healthy
-        healthy = _link_util(env.vault_scripts / "vault-ocr-local.sh", env.local_bin / "vault-ocr-local", env, "vault-ocr-local", optional=True) and healthy
+        # got a working one.
+        for name, cfg in LINKED_COMMANDS.items():
+            if not cfg["posix"]:
+                continue
+            src_dir = _linked_command_src_dir(env, cfg["source"])
+            src = src_dir / f"{name}.sh"
+            healthy = _link_util(src, env.local_bin / name, env, name, optional=bool(cfg.get("optional"))) and healthy
         if skill_source.is_file():
             wrapper = f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(skill_source))} \"$@\"\n"
             target = env.local_bin / "agent-skill"
@@ -915,16 +987,10 @@ def utils(env: Env) -> bool:
             healthy = False
         return healthy
     healthy = True
-    # vault-push has no .ps1 twin yet (real, separate gap: it was never
-    # ported to Windows at all, not just never linked -- out of scope for
-    # today's fix, flagged separately). Only link what actually exists.
-    for name, src_dir in (
-        ("agent-sync", env.engine_scripts),
-        ("agent-doctor", env.engine_scripts),
-        ("agent-now", env.engine_scripts),
-        ("council", env.engine_scripts),
-        ("vault-groom", env.vault_scripts),
-    ):
+    for name, cfg in LINKED_COMMANDS.items():
+        if not cfg["windows"]:
+            continue
+        src_dir = _linked_command_src_dir(env, cfg["source"])
         src = src_dir / f"{name}.ps1"
         if not src.is_file():
             env.log(f"utils: missing source {src}")
@@ -954,7 +1020,83 @@ def utils(env: Env) -> bool:
     else:
         env.log(f"utils: missing source {skill_source}")
         healthy = False
+    # Registry-only PATH fix (release-critical: without this, every bare
+    # command above resolves only in a terminal that already had
+    # ~/.local/bin on PATH from some other source). Best-effort: a registry
+    # failure is loud in the log but never flips this phase to failed --
+    # the wrappers themselves were still written correctly, and a future
+    # doctor check surfaces a PATH that's still missing them.
+    _ensure_user_path_entry(env)
     return healthy
+
+
+def _ensure_user_path_entry(env: Env) -> None:
+    """Adds env.local_bin to HKCU\\Environment's Path so bare commands (not
+    just full-path invocations) work in a NEW terminal. Windows has no
+    always-sourced profile equivalent to POSIX's typical ~/.local/bin
+    PATH entry -- without this, every wrapper utils() just wrote is
+    reachable only by full path, forever, on a fresh install. Registry
+    only: a running terminal's own os.environ is a snapshot from when it
+    started and cannot be fixed retroactively, same as a manual `setx`."""
+    if not IS_WINDOWS:
+        return
+    try:
+        import winreg
+    except ImportError as exc:
+        env.log(f"path: WARNING -- winreg unavailable ({exc}); add {env.local_bin} to PATH manually")
+        return
+    target = str(env.local_bin)
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                             winreg.KEY_READ | winreg.KEY_WRITE) as key:
+            try:
+                current, kind = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                current, kind = "", winreg.REG_EXPAND_SZ
+            if kind not in (winreg.REG_SZ, winreg.REG_EXPAND_SZ):
+                kind = winreg.REG_EXPAND_SZ
+            entries = [e for e in current.split(";") if e.strip()]
+            # Case-insensitive, trailing-slash-tolerant: Windows paths are
+            # case-insensitive and a prior run (or the user by hand) may
+            # have added the same folder with a trailing backslash.
+            normalized = {e.strip().rstrip("\\/").lower() for e in entries}
+            if target.rstrip("\\/").lower() in normalized:
+                env.log(f"path: {target} already on user PATH")
+                return
+            entries.append(target)
+            new_value = ";".join(entries)
+            winreg.SetValueEx(key, "Path", 0, kind, new_value)
+    except OSError as exc:
+        # Loud in the log, not a failed phase (see utils()'s call site): the
+        # wrappers this run wrote are still correct, only the PATH entry
+        # didn't happen -- a later doctor check can surface and retry it.
+        env.log(f"path: WARNING -- could not update user PATH via registry ({exc}); add {target} to PATH manually")
+        return
+    env.log(f"path: added {target} to user PATH -- open a new terminal for bare commands to work")
+    _broadcast_environment_change()
+
+
+def _broadcast_environment_change() -> None:
+    """Tells already-open top-level windows (Explorer, etc.) that the
+    environment changed, matching what `setx`/System Properties does after
+    an Environment Variables edit. Best-effort only: a NEW terminal already
+    picks up the registry value on its own by re-reading HKCU\\Environment
+    at process start, so a failure here just means already-open windows
+    stay stale a little longer, never a correctness problem."""
+    if not IS_WINDOWS:
+        return
+    try:
+        import ctypes
+        HWND_BROADCAST = 0xFFFF
+        WM_SETTINGCHANGE = 0x1A
+        SMTO_ABORTIFHUNG = 0x0002
+        result = ctypes.c_long()
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment",
+            SMTO_ABORTIFHUNG, 5000, ctypes.byref(result),
+        )
+    except Exception:
+        pass
 
 
 def local_model_runtime(env: Env) -> bool:
@@ -1056,11 +1198,18 @@ def _install_systemd_units(env: Env) -> bool:
     # this one in the same pass -- silent instead of a loud, findable log
     # line otherwise.
     if not (env.local_bin / "agent-sync").exists():
-        env.log(
+        warning = (
             "systemd: WARNING -- ~/.local/bin/agent-sync does not exist yet; "
             "the timer's ExecStart references it anyway and will fail until "
             "utils() successfully links it on a future guard run"
         )
+        env.log(warning)
+        # Also stderr, not just the log file: this is defense-in-depth for a
+        # case that should never fire (utils() always runs first in the same
+        # apply/guard pass) -- if it ever does, it needs to be humanly
+        # visible during an interactive apply, not only discoverable by
+        # someone who thinks to open agent-sync.log.
+        print(warning, file=sys.stderr)
     for path, content, label in (
         (unit_dir / "agent-sync.service", _systemd_service_content(env), "agent-sync.service set to pull mode"),
         (unit_dir / "agent-sync.timer", _SYSTEMD_TIMER, "agent-sync.timer updated"),
@@ -1080,7 +1229,7 @@ def _install_systemd_units(env: Env) -> bool:
         env.log("systemd: systemctl not found -- unit files written but not enabled")
         return healthy
     if changed:
-        r = subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, text=True)
+        r = _run_external(["systemctl", "--user", "daemon-reload"], timeout=30, capture_output=True, text=True)
         if r.returncode != 0:
             env.log(f"systemd: user daemon-reload failed: {(r.stderr or r.stdout).strip()}")
             healthy = False
@@ -1091,8 +1240,8 @@ def _install_systemd_units(env: Env) -> bool:
     # 2026-07-13): a fresh install wrote inert unit files that never ran
     # unless a human happened to `systemctl --user enable` them by hand.
     # --now also starts it immediately rather than waiting for next login.
-    r = subprocess.run(["systemctl", "--user", "enable", "--now", "agent-sync.timer"],
-                        capture_output=True, text=True)
+    r = _run_external(["systemctl", "--user", "enable", "--now", "agent-sync.timer"],
+                       timeout=30, capture_output=True, text=True)
     if r.returncode != 0:
         env.log(
             "systemd: could not enable agent-sync.timer "
@@ -1122,7 +1271,7 @@ def _install_scheduled_task(env: Env) -> bool:
     run_cmd = f'wscript.exe "{wrapper_path}"'
     every30 = ["schtasks.exe", "/Create", "/TN", task_name, "/SC", "MINUTE", "/MO", "30", "/TR", run_cmd, "/F"]
     logon = ["schtasks.exe", "/Create", "/TN", f"{task_name} Logon", "/SC", "ONLOGON", "/TR", run_cmd, "/F"]
-    r = subprocess.run(every30, capture_output=True, text=True)
+    r = _run_external(every30, timeout=60, capture_output=True, text=True)
     if r.returncode != 0:
         env.log(f"scheduled-task: schtasks.exe failed for '{task_name}': {r.stdout}{r.stderr}")
         # The every-30-minutes task IS the recurring guard; without it there
@@ -1130,7 +1279,7 @@ def _install_scheduled_task(env: Env) -> bool:
         # (a redundant nicety the every-30 task already covers within 30min).
         return False
     env.log(f"scheduled-task: installed/updated '{task_name}' via schtasks.exe")
-    r = subprocess.run(logon, capture_output=True, text=True)
+    r = _run_external(logon, timeout=60, capture_output=True, text=True)
     if r.returncode == 0:
         env.log(f"scheduled-task: installed/updated '{task_name} Logon' via schtasks.exe")
         return True
@@ -1541,8 +1690,8 @@ def _send_healthcheck(env: Env) -> None:
     elif webhook:
         sent = _post_form(webhook, {"host": hostn, "text": msg})
     if not sent and not IS_WINDOWS and resolve_cmd("notify-send"):
-        r = subprocess.run(["notify-send", "-u", "critical", "-a", "agent-healthcheck",
-                             "Agents: something is wrong", msg], capture_output=True)
+        r = _run_external(["notify-send", "-u", "critical", "-a", "agent-healthcheck",
+                            "Agents: something is wrong", msg], timeout=5, capture_output=True)
         sent = r.returncode == 0
     if sent:
         env.log(f"healthcheck: sent ({sig})")
@@ -1603,6 +1752,156 @@ def _parse_cli(argv: list[str]) -> tuple[str, bool, bool, list[str]]:
     return (cleaned[0] if cleaned else "help"), skip_mcp, allow_offline, cleaned[1:]
 
 
+# ── vault-push (cross-platform port of vault-push.sh's exact behavior) ─────
+# vault-push.sh/.ps1 are now thin OS wrappers that exec/forward into this
+# subcommand (see docs/sync-contract.md and vault-write-architecture.md):
+# one Python implementation instead of maintaining the git-commit/rebase/
+# mirror logic twice. tests/test_vault_push.py (the POSIX acceptance
+# harness) exercises this through the bash wrapper and must keep passing
+# unchanged; tests/test_vault_push_python.py exercises this entry point
+# directly, cross-platform.
+
+class _VaultPushUsageError(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+def _parse_vault_push_args(argv: list[str]) -> tuple[str, list[str]]:
+    """Mirrors vault-push.sh's own `while [ $# -gt 0 ]` loop: -m MSG, glued
+    -mMSG, `--` stops flag parsing and takes every remaining argument as a
+    file verbatim (even one that looks like -m), anything else is a file."""
+    msg: str | None = None
+    files: list[str] = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "-m":
+            if i + 1 >= len(argv):
+                raise _VaultPushUsageError("argument missing for -m")
+            msg = argv[i + 1]
+            i += 2
+            continue
+        if arg.startswith("-m") and arg != "-m":
+            msg = arg[2:]
+            i += 1
+            continue
+        if arg == "--":
+            files.extend(argv[i + 1:])
+            break
+        files.append(arg)
+        i += 1
+    if not msg:
+        raise _VaultPushUsageError('needs -m "message"')
+    return msg, files
+
+
+def _vault_push_publish(env: Env) -> int:
+    if _git(env, "push", env.remote, env.branch).returncode == 0:
+        print(f"vault-push: push {env.remote} OK")
+    else:
+        if _git(env, "fetch", "--prune", env.remote, env.branch).returncode != 0:
+            print(f"vault-push: {env.remote} OFFLINE — the commit stays local; run agent-sync publish later")
+            return 1
+        status = _git(env, "status", "--porcelain", "--untracked-files=no")
+        if status.stdout.strip():
+            print(f"vault-push: {env.remote} rejected but the working tree has uncommitted changes — NOT rebasing, resolve by hand")
+            return 1
+        if _git(env, "rebase", f"{env.remote}/{env.branch}").returncode == 0:
+            if _git(env, "push", env.remote, env.branch).returncode != 0:
+                print(f"vault-push: {env.remote} still rejected after rebase — try again")
+                return 1
+            print(f"vault-push: push {env.remote} OK (after a clean rebase)")
+        else:
+            _git(env, "rebase", "--abort")
+            print(f"vault-push: {env.remote} DIVERGENCE WITH CONFLICT — needs a manual 'git pull --rebase {env.remote} {env.branch}'")
+            return 1
+
+    # Mirrors are explicit downstream replicas: never rewrite the canonical
+    # local history, never affect the exit code. A stale mirror is aligned
+    # with force-with-lease only after the authoritative remote already
+    # accepted the same commit.
+    for mirror in env.mirrors:
+        if _git(env, "remote", "get-url", mirror).returncode != 0:
+            print(f"vault-push: mirror '{mirror}' is not configured; skipped")
+            continue
+        if _git(env, "push", mirror, env.branch).returncode == 0:
+            print(f"vault-push: push mirror {mirror} OK")
+        elif (_git(env, "fetch", "--prune", mirror, env.branch).returncode == 0
+              and _git(env, "push", "--force-with-lease", mirror, env.branch).returncode == 0):
+            print(f"vault-push: mirror {mirror} aligned to authoritative {env.remote}")
+        else:
+            print(f"vault-push: mirror {mirror} not updated; authoritative {env.remote} is safe")
+    return 0
+
+
+def _vault_push_locked(env: Env, msg: str, files: list[str]) -> int:
+    # Local-Only sentinel (same "local"/"none" values publish() already
+    # special-cases): no remote is ever meant to exist, so skip the "is it
+    # configured" check below instead of failing on a git remote that was
+    # never supposed to be there. The commit itself still happens further
+    # down -- Local-Only means no publication target, not no local history.
+    local_only = env.remote in ("local", "none")
+    if not local_only and _git(env, "remote", "get-url", env.remote).returncode != 0:
+        print(f"vault-push: authoritative remote '{env.remote}' is not configured")
+        return 1
+
+    if files and _git(env, "add", "--", *files).returncode != 0:
+        print("vault-push: git add failed")
+        return 1
+    if _git(env, "diff", "--cached", "--quiet").returncode == 0:
+        print("vault-push: nothing staged, nothing to commit")
+        return 0
+
+    if _git(env, "commit", "-q", "-m", msg).returncode != 0:
+        print("vault-push: commit failed")
+        return 1
+    short = _git(env, "rev-parse", "--short", "HEAD").stdout.strip()
+    print(f"vault-push: commit {short}")
+
+    if local_only:
+        print(f"vault-push: push skipped (Local-Only mode, remote={env.remote})")
+        return 0
+
+    return _vault_push_publish(env)
+
+
+def _vault_push_cli(argv: list[str]) -> int:
+    try:
+        msg, files = _parse_vault_push_args(argv)
+    except _VaultPushUsageError as exc:
+        print(f"vault-push: {exc.message}", file=sys.stderr)
+        return 2
+
+    try:
+        env = Env()
+    except RemoteConfigError as exc:
+        print(f"vault-push: {exc}", file=sys.stderr)
+        return 2
+
+    if not env.vault_data.is_dir():
+        print(f"vault-push: vault not found ({env.vault_data})")
+        return 1
+
+    # Same host-wide lock file agent_sync.py's own apply/guard/publish runs
+    # use by default (env.log_dir / "agent-sync.lock"), acquired the same
+    # way (SyncRunLock, fcntl.flock/msvcrt.locking): without this, a
+    # `vault-push` running concurrently with an apply/guard cycle could
+    # interleave a commit with a mid-apply working tree.
+    lock_file = Path(os.environ.get("AGENT_SYNC_LOCK_FILE") or str(env.log_dir / "agent-sync.lock"))
+    try:
+        lock_timeout = float(os.environ.get("AGENT_SYNC_LOCK_TIMEOUT_SECONDS") or "2")
+    except ValueError:
+        print("vault-push: AGENT_SYNC_LOCK_TIMEOUT_SECONDS must be numeric", file=sys.stderr)
+        return 2
+
+    with SyncRunLock(lock_file, timeout=lock_timeout) as lock:
+        if not lock.acquired:
+            print("vault-push: sync lock busy (another agent-sync/vault-push is running) -- aborting", file=sys.stderr)
+            return 75
+        return _vault_push_locked(env, msg, files)
+
+
 def _print_config(argv: list[str]) -> int:
     if len(argv) != 2 or argv[1] not in {"authoritative_remote", "mirrors"}:
         print("Use: agent-sync config authoritative_remote|mirrors", file=sys.stderr)
@@ -1641,6 +1940,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if argv[0] == "config":
         return _print_config(argv)
+    if argv[0] == "vault-push":
+        return _vault_push_cli(argv[1:])
 
     mode, skip_mcp, allow_offline, extras = _parse_cli(argv)
     if mode not in MODES:

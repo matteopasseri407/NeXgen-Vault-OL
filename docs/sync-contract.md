@@ -87,6 +87,18 @@ run already owns the work. Every declared phase reports success or failure.
 Failures are aggregated, later independent checks still run, and the final exit
 code is non-zero if any required phase failed.
 
+`vault-push`'s own commit/rebase/publish logic is the `vault-push` subcommand
+of this same `agent_sync.py` — not a separate implementation. It locks the
+same lock file by default (`AGENT_SYNC_LOCK_FILE`, else `agent-sync.lock`
+under this same host's state directory), so a `guard` cycle and a manual
+`vault-push` on the same machine still serialize against each other. Both
+`vault-push.sh` (Linux/Mac) and `vault-push.ps1` (Windows) are thin wrappers
+that forward into it, matching this contract's own launcher pattern below.
+When the engine itself is unreachable (no resolvable `agent_sync.py` or no
+Python) and `KNOWLEDGE_VAULT_REMOTE` is set, both wrappers fall back to a
+minimal shell-and-git emergency lane — commit, push with one rebase retry,
+no mirrors — announcing the degraded mode loudly rather than failing.
+
 The Linux and Windows launchers call the same Python implementation. Automated
 tests cover both path dialects and Windows lock code, but an architecture
 change is not operationally complete until it has also been exercised on a

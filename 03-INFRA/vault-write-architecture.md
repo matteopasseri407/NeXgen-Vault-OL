@@ -16,7 +16,7 @@ itself uses:
 - **Notes / knowledge (markdown)**:
   - **Cloud-Server mode** → ONLY via the `vault-library` MCP (`create_note`, `append_note`, `update_note`). The MCP serializes writes with a lock (`flock`) and an `expected_hash` check, and commits directly to the remote bare repo as author "Vault MCP". Agents **never commit notes by hand with git**. (This branch is unconditional and unchanged — it is correct as-is.)
   - **Local-Only mode** → direct edits to the local Markdown files, committed with plain `git` by the agent, are the correct and only path. The whole premise of the Cloud-Server rule — "the MCP serializes concurrent writes against a shared remote" — does not apply: a genuinely single-machine Local-Only install has no remote `vault-library` container and nothing to serialize against. There is no second door being opened here; there is no first door (no MCP) to begin with.
-- **Infra files (scripts, manifests, hooks, config)** → `vault-push -m "message" <file...>`: git commit + publication to the configured authoritative remote, then its mirrors. A mirror never becomes an independent source of truth. This bullet describes Cloud-Server mode; `vault-push.sh` does not yet special-case the Local-Only `local`/`none` sentinel the way `agent_sync.py`'s `publish()` does, so it currently refuses even the local commit when no real remote named `local`/`none` is configured (see Known follow-ups). Until that is fixed, a Local-Only install commits infra files with plain `git` too.
+- **Infra files (scripts, manifests, hooks, config)** → `vault-push -m "message" <file...>`: git commit + publication to the configured authoritative remote, then its mirrors. A mirror never becomes an independent source of truth. This bullet describes Cloud-Server mode; `vault-push` recognizes the Local-Only `local`/`none` sentinel the same way `agent_sync.py`'s `publish()` does — it commits locally and skips only the remote push, it never refuses the local commit.
 
 ## Live components
 
@@ -24,7 +24,7 @@ itself uses:
 - **`cloud-pull.service`** (enabled): refreshes the local mirror by pulling from the remote backend.
 - **`agent-sync.timer` / Windows scheduled task `KnowledgeVault Agent Sync`**: `guard` mode, i.e. locked authoritative pull + automatic propagation of runtime derivatives + healthcheck, with no automatic push. Unsafe Git states block propagation. `apply` is the manual alias of guard. Publishing already-made local commits is a separate `publish` or `vault-push` action. Running without arguments is help-only; there is no combined `full` mode.
 - **`sync/remotes.yaml`**: the data-owned declaration of one authoritative remote and optional publication mirrors. `agent-sync`, `agent-doctor`, and the private publishing helper resolve this same policy.
-- **`vault-push`** (`03-INFRA/scripts/vault-push.sh`, symlinked into `~/.local/bin`): publishes infra files.
+- **`vault-push`**: publishes infra files. Cross-platform: the actual logic is one implementation, `agent_sync.py`'s `vault-push` subcommand. `03-INFRA/scripts/vault-push.sh` (symlinked into `~/.local/bin` on Linux/Mac) and `vault-push.ps1` (relinked + a `.cmd` wrapper on Windows) are both thin wrappers that forward into it — same single door on either OS.
 
 ## Retired
 
@@ -40,4 +40,3 @@ itself uses:
 
 - Move any plaintext tokens from CLI settings into env vars, so no config file holds a secret literally.
 - Exercise the transaction contract on a physical Windows host. Automated Windows coverage is necessary but does not satisfy the cross-machine definition of done by itself.
-- `vault-push.sh` does not recognize the Local-Only `KNOWLEDGE_VAULT_REMOTE=local`/`none` sentinel: it calls `git remote get-url "$REMOTE"` unconditionally and exits before committing when no remote literally named `local`/`none` exists. `agent_sync.py`'s `publish()` and (after this change) `agent-doctor`'s vault section already handle this sentinel correctly; `vault-push.sh` should get the same `env.remote in ("local", "none")`-style skip so it commits locally and skips only the remote push.

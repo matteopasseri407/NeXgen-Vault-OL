@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import load_agent_sync_module, run_agent_sync_python
+from conftest import REAL_SCRIPTS, load_agent_sync_module, run_agent_sync_python
 
 
 def _patch_apply_phases(monkeypatch, mod, called: list[str]) -> None:
@@ -1159,3 +1159,260 @@ def test_creds_health_survives_a_non_utf8_alert_conf_and_still_runs_healthcheck(
     mod.creds_health(env, do_creds=False, do_health=True)  # must not raise
 
     assert healthcheck_called, "_load_env_conf failing must not skip _send_healthcheck"
+
+
+# ── LINKED_COMMANDS single source (2026-07-13 follow-up) ──────────────────
+# utils()'s POSIX and Windows branches used to carry their own hardcoded
+# link lists. vault-push moved from "POSIX only, hand-listed" to "cross-
+# platform, driven by the same LINKED_COMMANDS dict both branches read" --
+# these two tests are the direct regression net for that move.
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink launcher behavior is covered on Linux and macOS.")
+def test_posix_utils_links_vault_push_launcher(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", False)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+
+    env = mod.Env()
+    mod.utils(env)
+
+    launcher = sandbox.home / ".local" / "bin" / "vault-push"
+    assert launcher.is_symlink()
+    assert launcher.resolve() == (sandbox.scripts_dir / "vault-push.sh").resolve()
+
+
+def test_windows_utils_installs_vault_push_command_wrapper(sandbox, monkeypatch):
+    # vault-push used to have no .ps1 twin at all on Windows -- LINKED_COMMANDS
+    # now declares it windows=True and utils()'s Windows branch, driven by
+    # that same dict, links it exactly like council/vault-groom.
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("USERPROFILE", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+    shutil.copy2(REAL_SCRIPTS / "vault-push.ps1", sandbox.scripts_dir / "vault-push.ps1")
+    monkeypatch.setitem(sys.modules, "winreg", _make_fake_winreg())
+
+    env = mod.Env()
+    mod.utils(env)
+
+    launcher = sandbox.home / ".local" / "bin" / "vault-push.ps1"
+    wrapper = sandbox.home / ".local" / "bin" / "vault-push.cmd"
+    assert launcher.exists()
+    assert launcher.resolve() == (sandbox.scripts_dir / "vault-push.ps1").resolve()
+    assert "vault-push.ps1" in wrapper.read_text(encoding="utf-8")
+
+
+# ── _run_external timeout primitive (2026-07-13 follow-up) ────────────────
+# Mirrors _run_python_script's own TimeoutExpired-swallowing test above:
+# mklink/pgrep/tasklist/systemctl/schtasks.exe/notify-send now all route
+# through this, so a single test proves the shared behavior instead of one
+# per call site.
+
+def test_run_external_times_out_instead_of_hanging(sandbox):
+    mod = load_agent_sync_module(sandbox)
+    hang_script = sandbox.home / "hang.py"
+    hang_script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+
+    result = mod._run_external([sys.executable, str(hang_script)], timeout=1, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "timed out after 1s" in result.stderr
+
+
+def test_run_external_returns_real_output_on_success(sandbox):
+    mod = load_agent_sync_module(sandbox)
+    ok_script = sandbox.home / "ok.py"
+    ok_script.write_text("print('hello')\n", encoding="utf-8")
+
+    result = mod._run_external([sys.executable, str(ok_script)], timeout=10, capture_output=True, text=True)
+
+    assert result.returncode == 0
+    assert "hello" in result.stdout
+
+
+# ── Windows User PATH (release-critical, 2026-07-13 follow-up) ────────────
+# utils() writes command wrappers into env.local_bin, but nothing ever put
+# that folder on the Windows User PATH: every wrapper was reachable only by
+# full path forever, on every fresh install, until a human added it by
+# hand. winreg is monkeypatched into sys.modules (a fake, in-memory
+# HKCU\Environment) so this is POSIX-runnable; real winreg only exists on
+# Windows, and _ensure_user_path_entry's own `import winreg` picks up
+# whatever is in sys.modules under that name.
+
+def _make_fake_winreg(initial_path: str = ""):
+    """Minimal in-memory stand-in for the winreg module surface
+    _ensure_user_path_entry actually calls: HKEY_CURRENT_USER is an opaque
+    sentinel (never dereferenced), OpenKey returns a context-manager key
+    object, QueryValueEx/SetValueEx read/write a single in-memory dict --
+    enough to exercise the real append/no-op/preserve logic under test
+    without touching a real registry (which does not exist on this
+    machine)."""
+    state = {}
+    if initial_path:
+        state["Path"] = (initial_path, 2)  # 2 == REG_EXPAND_SZ, matches below
+
+    class _Key:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    fake = SimpleNamespace(
+        HKEY_CURRENT_USER=object(),
+        KEY_READ=1,
+        KEY_WRITE=2,
+        REG_SZ=1,
+        REG_EXPAND_SZ=2,
+        OpenKey=lambda hive, subkey, reserved=0, access=0: _Key(),
+        QueryValueEx=lambda key, name: state[name] if name in state else (_ for _ in ()).throw(FileNotFoundError(name)),
+        SetValueEx=lambda key, name, reserved, kind, value: state.__setitem__(name, (value, kind)),
+        _state=state,
+    )
+    return fake
+
+
+def test_windows_user_path_appends_when_missing(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("USERPROFILE", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+    fake_winreg = _make_fake_winreg(r"C:\Windows;C:\Windows\System32")
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+    env = mod.Env()
+
+    mod._ensure_user_path_entry(env)
+
+    value, _kind = fake_winreg._state["Path"]
+    entries = value.split(";")
+    assert str(env.local_bin) in entries
+    assert r"C:\Windows" in entries
+    assert r"C:\Windows\System32" in entries
+    assert f"added {env.local_bin}" in env.log_path.read_text(encoding="utf-8")
+
+
+def test_windows_user_path_noop_when_already_present_case_insensitive(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("USERPROFILE", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+    env_probe = mod.Env()
+    # Same folder, different case AND a trailing backslash -- both must be
+    # tolerated by the idempotent check, not just an exact string match.
+    existing = f"C:\\Windows;{str(env_probe.local_bin).upper()}\\"
+    fake_winreg = _make_fake_winreg(existing)
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+    env = mod.Env()
+
+    mod._ensure_user_path_entry(env)
+
+    value, _kind = fake_winreg._state["Path"]
+    assert value == existing, "an already-present entry must not be rewritten"
+    assert f"{env.local_bin} already on user PATH" in env.log_path.read_text(encoding="utf-8")
+
+
+def test_windows_user_path_preserves_existing_entries(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("USERPROFILE", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+    # C:\tools\bin, deliberately not a Windows-home-shaped path: the
+    # leak-scan gate blocks that shape in the public tree, synthetic or not.
+    fake_winreg = _make_fake_winreg(r"C:\Windows;C:\Program Files\Git\cmd;C:\tools\bin")
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+    env = mod.Env()
+
+    mod._ensure_user_path_entry(env)
+
+    entries = fake_winreg._state["Path"][0].split(";")
+    assert r"C:\Windows" in entries
+    assert r"C:\Program Files\Git\cmd" in entries
+    assert r"C:\tools\bin" in entries
+    assert str(env.local_bin) in entries
+
+
+def test_windows_user_path_creates_value_when_entirely_absent(sandbox, monkeypatch):
+    """Plausible first-run state on a fresh Windows account: the
+    HKCU\\Environment key exists (it always does) but has never had a
+    "Path" value written to it at all -- distinct from the "already
+    present"/"append to existing entries" cases above, and distinct from
+    the OpenKey-itself-fails case below. QueryValueEx raising
+    FileNotFoundError is _make_fake_winreg's own default (initial_path=""
+    means no "Path" key seeded into its in-memory state at all)."""
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("USERPROFILE", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+    fake_winreg = _make_fake_winreg()
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+    env = mod.Env()
+
+    mod._ensure_user_path_entry(env)
+
+    value, kind = fake_winreg._state["Path"]
+    assert value == str(env.local_bin), "with no prior value, the new Path value must be exactly local_bin, nothing else"
+    assert kind == fake_winreg.REG_EXPAND_SZ
+    assert f"added {env.local_bin}" in env.log_path.read_text(encoding="utf-8")
+
+
+def test_windows_user_path_registry_failure_is_logged_not_raised(sandbox, monkeypatch):
+    """A registry failure must not crash utils() or flip the phase to
+    failed -- see utils()'s own call-site comment. A future doctor check
+    surfaces a still-missing PATH entry; this phase's job (writing the
+    wrappers) is already done by the time this runs."""
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("USERPROFILE", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+
+    def raise_open_key(*_args, **_kwargs):
+        raise OSError("registry unavailable in this sandbox")
+
+    fake_winreg = _make_fake_winreg()
+    fake_winreg.OpenKey = raise_open_key
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+    env = mod.Env()
+
+    mod._ensure_user_path_entry(env)  # must not raise
+
+    assert "WARNING" in env.log_path.read_text(encoding="utf-8")
+
+
+# ── vault-push subcommand wiring (2026-07-13) ──────────────────────────────
+# Full behavioral coverage (commit/push/lock/local-only/usage-error paths)
+# lives in test_vault_push_python.py; this is just proof that main() itself
+# actually dispatches to it and documents it, the same class of gap the
+# LINKED_COMMANDS tests above guard against for utils().
+
+def test_help_text_documents_vault_push_subcommand(sandbox):
+    proc = subprocess.run(
+        [sys.executable, str(sandbox.scripts_dir / "agent_sync.py"), "--help"],
+        env=sandbox.env(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "vault-push" in proc.stdout
+
+
+def test_main_dispatches_vault_push_before_mode_validation(sandbox, monkeypatch):
+    """vault-push is not a MODES entry -- it must be special-cased in main()
+    the same way 'config' already is, dispatched before the mode/extras
+    validation that would otherwise reject it as an unknown mode."""
+    mod = load_agent_sync_module(sandbox)
+    called = []
+    monkeypatch.setattr(mod, "_vault_push_cli", lambda argv: called.append(argv) or 0)
+
+    rc = mod.main(["vault-push", "-m", "msg", "file.txt"])
+
+    assert rc == 0
+    assert called == [["-m", "msg", "file.txt"]]
