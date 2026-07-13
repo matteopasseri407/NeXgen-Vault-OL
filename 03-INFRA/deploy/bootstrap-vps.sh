@@ -60,14 +60,46 @@ configure_firewall() {
     return 0
   fi
 
+  # ufw needs root. Without this check, a non-root user (the default login
+  # on Oracle Cloud's recommended free-tier image, the platform this README
+  # points at) would hit a bare "Permission denied" from the first `ufw`
+  # call below and abort under `set -e` -- before any stack comes up, but
+  # with no actionable message either. Prefer sudo (it prompts for a
+  # password interactively same as any other first-run setup step); only
+  # skip, gracefully, if there is truly no escalation path.
+  local SUDO=""
+  if [ "$(id -u)" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1; then
+      SUDO="sudo"
+    else
+      echo "WARNING: ufw needs root and no 'sudo' is available on this host"
+      echo "  -- skipping host firewall setup. Re-run as root, install sudo,"
+      echo "  or configure ufw by hand: ufw allow OpenSSH && ufw default deny"
+      echo "  incoming && ufw default allow outgoing && ufw --force enable"
+      echo "  The only thing standing between these services and the public"
+      echo "  internet is the 127.0.0.1 binding in each docker-compose.yml."
+      return 0
+    fi
+  fi
+
   echo "==> Host firewall (ufw baseline)"
   # Allow SSH FIRST -- must land before default-deny/enable below, or a
   # fresh `ufw enable` on a box with no prior rules can cut off the very
   # SSH session running this script.
-  ufw allow OpenSSH
-  ufw default deny incoming
-  ufw default allow outgoing
-  ufw --force enable
+  $SUDO ufw allow OpenSSH
+  # OpenSSH's ufw profile only covers the default port 22. A host with SSH
+  # moved to a non-standard port (a common hardening step) would otherwise
+  # lock itself out on `default deny incoming` below. Best-effort: only
+  # works when actually connected over SSH (SSH_CONNECTION set); silently
+  # a no-op otherwise (console/serial access, or port 22 already covered).
+  ssh_port="$(printf '%s' "${SSH_CONNECTION:-}" | awk '{print $4}')"
+  if [ -n "$ssh_port" ] && [ "$ssh_port" != "22" ]; then
+    $SUDO ufw allow "$ssh_port"/tcp
+    echo "  also allowed detected non-default SSH port $ssh_port/tcp"
+  fi
+  $SUDO ufw default deny incoming
+  $SUDO ufw default allow outgoing
+  $SUDO ufw --force enable
   echo "  ufw enabled: deny incoming by default, OpenSSH allowed, outgoing allowed."
   echo "  This is a minimum baseline, not a substitute for per-service hardening."
 }
