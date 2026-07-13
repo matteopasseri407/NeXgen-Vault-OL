@@ -10,8 +10,35 @@ of any engine release.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-13
+
+A security-hardening and small-team-readiness pass: a dedicated audit found
+28 issues across secrets handling, supply chain, injection surfaces, and
+network exposure; every one confirmed by an independent adversarial check
+before being fixed, and every fix verified against real CI, not just local
+tests. Alongside it, the groundwork for evaluating this as shared
+infrastructure for a small team, and the sync/skills work started earlier.
+
 ### Added
 
+- Declarative team/organization routing: an optional `Team members` section
+  in `USER-PROFILE.md`, per-member Council seat files, and a `personal`
+  vs. `team` scope on skills. Explicitly a routing convenience, not access
+  control. See `docs/team.md` and the new `docs/org-deployment.md`, which
+  documents what a shared Cloud-Server backend does and does not protect
+  for a small team today.
+- Mode (Local-Only vs. Cloud-Server) is now a contract `agent-doctor` and
+  `vault-push` actually verify, not just prose the LLM interprets. It stays
+  a verified floor, never a ceiling: declaring Cloud-Server never blocks a
+  connector you've configured anyway.
+- Bearer-token authentication wired into n8n's MCP endpoint, the OCR API,
+  and Firecrawl's Redis. None of these had a credential check before on a
+  shared deploy.
+- Host firewall baseline (`ufw`, idempotent) in the Cloud-Server bootstrap
+  script.
+- CI gates: ruff baseline, shellcheck, `pip-audit`, Docker Compose
+  validation, and PowerShell static analysis. Previously only
+  syntax/compile checks ran.
 - `agent-skill list|find|show|path`, the small cross-platform command for
   loading exactly one managed skill body on demand.
 - Explicit `exposure: manual|core` in the skill manifest, plus a generated
@@ -22,6 +49,21 @@ of any engine release.
 
 ### Changed
 
+- Council seats for `codex`/`agy`/`opencode` now launch with an isolated,
+  explicitly-allowlisted environment (and an isolated config directory
+  where verified live) instead of inheriting the full host environment and
+  every application token on it. Closes a path where a prompt-injected diff
+  passed to `council code-review` could, in theory, reach a real MCP server
+  despite the role prompt's text-only "no tools" instruction. The relay
+  mode's output-redaction gate now runs in every Council mode, not only
+  relay.
+- The MCP manifest's npm-package pin check and its check against literal
+  secrets in `env:` values now run on the manifest actually loaded at
+  runtime (the user's vault copy), not only against a test fixture.
+- Deploy image references pinned to explicit versions, with a Docker digest
+  pin on the OCR image now that the leak-scan false positive below is
+  fixed. GitHub Actions pinned to commit SHA instead of a mutable tag.
+- CI workflow declares least-privilege `permissions: contents: read`.
 - Managed skill bodies now live in `~/.agents/skill-library/`, outside eager
   discovery roots. Only explicitly core bodies enter `~/.agents/skills/` or
   Codex's runtime view. Claude retains declared native-lazy views.
@@ -36,6 +78,27 @@ of any engine release.
 
 ### Fixed
 
+- The anti-leak pattern for high-entropy secrets only matched a value
+  wrapped in quotes: the same value unquoted (a bare `.env` line, an
+  `Authorization: Bearer` header) passed both the CI gate and Council's
+  always-on egress scan undetected.
+- n8n backups were unencrypted and world-readable, and n8n's own encryption
+  key was never set explicitly, so n8n generated one inside the same volume
+  the backup archived. A copied backup exposed every credential n8n ever
+  held. The documented GPG secrets workflow also decrypted to a
+  world-readable temp file for the duration of every edit.
+- Path traversal in skill names: an unvalidated manifest entry could write
+  or symlink outside the intended skill library (confirmed with a live
+  reproduction, not just static reading).
+- Bearer tokens (`vault-library`, Firecrawl) were briefly visible on the
+  process table via `curl`'s command-line arguments during a doctor probe
+  or scrape call.
+- `fastapi` bumped 0.115.6 → 0.139.0 (pulls a patched `starlette`), closing
+  8 tracked CVEs in the OCR service's dependency chain. Validated with a
+  real dependency-resolution check and a live RapidOCR round-trip rather
+  than applied blind.
+- A dependency-audit exception scoped to the OCR service's known debt used
+  to apply to every `requirements*.txt` in the repo, not just that one file.
 - Legacy migration preserves declared Claude native-lazy links instead of
   treating them as stale eager copies.
 - Dirty, wrong-branch, ahead, diverged, missing-remote, fetch-failed, and
@@ -43,9 +106,9 @@ of any engine release.
   propagation run.
 - The distributed MCP manifest's `filesystem` server no longer mounts the
   user's entire home (a bare `${HOME}` argument). It now mounts two
-  explicit, configurable roots — `AGENT_ENGINE_ROOT` and `AGENT_VAULT_DATA`,
-  the same canonical engine/data roots the rest of the layer already
-  resolves — and a user can add more roots as extra `args` entries. The
+  explicit, configurable roots: `AGENT_ENGINE_ROOT` and `AGENT_VAULT_DATA`
+  (the same canonical engine/data roots the rest of the layer already
+  resolves). A user can add more roots as extra `args` entries. The
   `memory` server is no longer mounted by default: it required
   `MCP_MEMORY_OPT_IN` because it is a second, non-authoritative memory
   channel outside the KnowledgeVault.

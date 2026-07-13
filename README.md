@@ -1,5 +1,9 @@
 # NeXgen Engine (Alpha)
 
+[![CI](https://github.com/matteopasseri407/NeXgen-Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/matteopasseri407/NeXgen-Engine/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/matteopasseri407/NeXgen-Engine)](https://github.com/matteopasseri407/NeXgen-Engine/releases/latest)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
+
 A Git-backed AgentOps control layer for AI coding CLIs — in plain terms, a shared rulebook and memory for AI agent tools like Claude Code, useful for non-coding work (notes, research, career docs) just as much as for software projects. Note: This project is currently in Alpha.
 
 Shared instructions, generated MCP config, drift checks, secrets discipline, and cross-machine agent memory, all as plain files in a Git repo, not a hosted service.
@@ -15,7 +19,7 @@ You run at least one agentic CLI on your own machine and want the actual vault, 
 If you run several CLIs, or the same setup across more than one machine, that's where the framework does most of its work: the provisioner and doctor scripts described below exist for that case.
 If it's just one CLI on one machine, you still get the knowledge vault and the bootstrap discipline, without needing to run any of the sync tooling.
 
-Evaluating this for more than one person (a couple of colleagues, a small company)? The security and identity model is mono-user today. Read [`docs/team.md`](docs/team.md) before you adopt it as shared infrastructure.
+Evaluating this for more than one person (a couple of colleagues, a small company)? The security and identity model is mono-user today. Read [`docs/team.md`](docs/team.md) and, if you're weighing a shared Cloud-Server backend, [`docs/org-deployment.md`](docs/org-deployment.md) before you adopt it as shared infrastructure. Security posture and how to report an issue are in [`SECURITY.md`](SECURITY.md).
 
 ## Demo path
 
@@ -164,7 +168,7 @@ Fai girare almeno una CLI agentica sulla tua macchina e vuoi il vault vero, non 
 Se ne usi più di una, o lo stesso setup su più macchine, è lì che il framework rende di più: il provisioner e lo script doctor descritti sotto servono esattamente a quello.
 Se invece hai una sola CLI su una sola macchina, ti restano comunque il knowledge vault e la disciplina del bootstrap, senza dover far girare nessuno strumento di sync.
 
-Lo stai valutando per più di una persona (qualche collega, una piccola azienda)? Il modello di sicurezza e identità oggi è mono-utente. Leggi [`docs/team.md`](docs/team.md) prima di adottarlo come infrastruttura condivisa.
+Lo stai valutando per più di una persona (qualche collega, una piccola azienda)? Il modello di sicurezza e identità oggi è mono-utente. Leggi [`docs/team.md`](docs/team.md) e, se stai valutando un backend Cloud-Server condiviso, [`docs/org-deployment.md`](docs/org-deployment.md) prima di adottarlo come infrastruttura condivisa. La postura di sicurezza e come segnalare un problema sono in [`SECURITY.md`](SECURITY.md).
 
 ## Percorso demo
 
