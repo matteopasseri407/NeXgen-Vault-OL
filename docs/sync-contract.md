@@ -96,9 +96,20 @@ physical Windows installation.
 
 This whole contract is built for one person keeping several machines of
 their own in sync, not for a team writing to one shared vault at the same
-time. The lock described above is host-wide: it serializes the machines of
-a single owner, and it does nothing to arbitrate commits arriving from
-30-40 different people's machines against the same vault. If a team shares
+time. The lock described above (see "Lock and result") is per-machine, not
+per-owner: it is a local file lock under that machine's own home directory,
+and it only serializes concurrent processes running ON THAT SAME machine
+(e.g. a `guard` cycle overlapping a manual `vault-push`). It does nothing to
+arbitrate between a single owner's own several machines running
+concurrently, let alone between 30-40 different people's machines against
+the same vault. Concurrent writers are instead protected by git's own
+atomic push: a non-fast-forward push is rejected by the remote outright,
+never silently overwritten, and the publish path fetches, compares, and
+retries with a clean rebase or aborts and asks for manual resolution on a
+real conflict. The one gap that leaves open: two machines editing
+different, non-conflicting parts of the same file at nearly the same time
+can be merged by that automatic rebase with no alert to either owner --
+nothing is lost, but the merge itself is never reviewed. If a team shares
 one vault as common infrastructure (see `docs/team.md` for why that's
 already a mono-user fit problem before sync even enters the picture),
 concurrent writes from multiple people are not a tested or supported
