@@ -6,6 +6,8 @@ import subprocess
 
 import pytest
 
+from conftest import REAL_SCRIPTS
+
 
 pytestmark = pytest.mark.skipif(
     os.name == "nt",
@@ -247,3 +249,131 @@ def test_vault_push_proceeds_once_sync_lock_is_free(sandbox):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert lock_file.exists(), "vault-push should create/use the shared lock file even on success"
     assert _git(sandbox.vault, "rev-parse", "HEAD").stdout.strip() != before
+
+
+# --- Real multi-machine contention -------------------------------------
+#
+# The 2026-07-13 follow-up review found every prior PullState/lock test
+# shaped a git history sequentially inside ONE test process before calling
+# into the code under test -- never two independent OS processes actually
+# racing each other. These two tests fix that: each "machine" is its own
+# HOME, its own clone, and its own lock file (the lock is per-machine by
+# design, see docs/sync-contract.md), and the rejection one machine hits is
+# a genuine side effect of the OTHER machine's real vault-push.sh run, not
+# git plumbing the test performed directly.
+
+def _init_machine(home: Path, remote: Path) -> Path:
+    vault = home / "KnowledgeVault"
+    subprocess.run(["git", "clone", "-q", str(remote), str(vault)], check=True, capture_output=True)
+    _git(vault, "config", "user.email", "nexgen-tests.invalid")
+    _git(vault, "config", "user.name", "NeXgen tests")
+    return vault
+
+
+def _machine_env(home: Path, vault: Path) -> dict:
+    env = dict(os.environ)
+    env["HOME"] = str(home)
+    env["USERPROFILE"] = str(home)
+    env["AGENT_VAULT_DATA"] = str(vault)
+    env["KNOWLEDGE_VAULT_PATH"] = str(vault)
+    env["KNOWLEDGE_VAULT_REMOTE"] = "origin"
+    env["KNOWLEDGE_VAULT_MIRRORS"] = ""
+    # Own lock file per machine, matching the real per-machine lock path --
+    # sharing one here would test single-machine serialization instead.
+    env["AGENT_SYNC_LOCK_FILE"] = str(home / "agent-sync.lock")
+    return env
+
+
+def _seed_bare_remote(path: Path) -> None:
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(path)], check=True)
+    seed = path.parent / f"{path.name}-seed"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
+    _git(seed, "config", "user.email", "nexgen-tests.invalid")
+    _git(seed, "config", "user.name", "NeXgen tests")
+    (seed / "README.md").write_text("seed\n", encoding="utf-8")
+    _git(seed, "add", "README.md")
+    _git(seed, "commit", "-q", "-m", "seed")
+    _git(seed, "remote", "add", "origin", str(path))
+    _git(seed, "push", "-q", "-u", "origin", "main")
+
+
+def test_two_real_machines_pushing_the_same_vault_do_not_lose_either_commit(tmp_path):
+    remote = tmp_path / "remote.git"
+    _seed_bare_remote(remote)
+
+    vault_a = _init_machine(tmp_path / "machine-a", remote)
+    vault_b = _init_machine(tmp_path / "machine-b", remote)
+    (vault_a / "from-a.md").write_text("machine a\n", encoding="utf-8")
+    (vault_b / "from-b.md").write_text("machine b\n", encoding="utf-8")
+
+    script = str(REAL_SCRIPTS / "vault-push.sh")
+
+    # Machine A pushes for real first -- a genuine side effect of its own
+    # vault-push.sh run, not history the test shaped by hand.
+    proc_a = subprocess.run(
+        ["bash", script, "-m", "from machine A", "from-a.md"],
+        env=_machine_env(tmp_path / "machine-a", vault_a),
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc_a.returncode == 0, proc_a.stdout + proc_a.stderr
+    assert "push origin OK" in proc_a.stdout
+
+    # Machine B is still based on the pre-A remote HEAD: its push is
+    # rejected for REAL (non-fast-forward against what A just pushed),
+    # forcing the script's real fetch -> compare -> clean-rebase -> retry
+    # path, produced by an actual second process, not fabricated by the test.
+    proc_b = subprocess.run(
+        ["bash", script, "-m", "from machine B", "from-b.md"],
+        env=_machine_env(tmp_path / "machine-b", vault_b),
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc_b.returncode == 0, proc_b.stdout + proc_b.stderr
+    assert "after a clean rebase" in proc_b.stdout
+
+    # Nothing was lost: the remote carries both machines' commits.
+    check = tmp_path / "check"
+    subprocess.run(["git", "clone", "-q", str(remote), str(check)], check=True, capture_output=True)
+    log = _git(check, "log", "--format=%s").stdout
+    assert "from machine A" in log
+    assert "from machine B" in log
+    assert (check / "from-a.md").exists()
+    assert (check / "from-b.md").exists()
+
+
+def test_two_real_processes_started_concurrently_never_corrupt_the_remote(tmp_path):
+    # Best-effort true-concurrency variant: both machines' vault-push.sh
+    # started as independent OS processes with no ordering imposed by the
+    # test (unlike the deterministic test above). This doesn't assert which
+    # one the OS schedules first -- only the property that actually matters
+    # for "6 machines on at once": both eventually succeed and nothing the
+    # remote already accepted is ever lost.
+    remote = tmp_path / "remote-race.git"
+    _seed_bare_remote(remote)
+
+    vault_a = _init_machine(tmp_path / "race-a", remote)
+    vault_b = _init_machine(tmp_path / "race-b", remote)
+    (vault_a / "race-a.md").write_text("race a\n", encoding="utf-8")
+    (vault_b / "race-b.md").write_text("race b\n", encoding="utf-8")
+
+    script = str(REAL_SCRIPTS / "vault-push.sh")
+    proc_a = subprocess.Popen(
+        ["bash", script, "-m", "race from A", "race-a.md"],
+        env=_machine_env(tmp_path / "race-a", vault_a),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    proc_b = subprocess.Popen(
+        ["bash", script, "-m", "race from B", "race-b.md"],
+        env=_machine_env(tmp_path / "race-b", vault_b),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    out_a = proc_a.communicate(timeout=30)[0]
+    out_b = proc_b.communicate(timeout=30)[0]
+
+    assert proc_a.returncode == 0, out_a
+    assert proc_b.returncode == 0, out_b
+
+    check = tmp_path / "check-race"
+    subprocess.run(["git", "clone", "-q", str(remote), str(check)], check=True, capture_output=True)
+    log = _git(check, "log", "--format=%s").stdout
+    assert "race from A" in log
+    assert "race from B" in log
