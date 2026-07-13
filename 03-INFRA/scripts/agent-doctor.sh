@@ -285,7 +285,13 @@ else
   ok "N8N_MCP_TOKEN not set -- not expected in current Mode (Local-Only / n8n not configured)"
 fi
 for v in VAULT_LIBRARY_TOKEN VAULT_LIBRARY_URL; do
-  [ -n "${!v:-}" ] && ok "$v present" || fail "$v missing"
+  if [ -n "${!v:-}" ]; then
+    ok "$v present"
+  elif connector_expected VAULT_LIBRARY_URL; then
+    fail "$v missing"
+  else
+    ok "$v not set -- not expected in current Mode (Local-Only / vault-library not configured)"
+  fi
 done
 [ -n "${DEEPSEEK_API_KEY:-}" ] && ok "DEEPSEEK_API_KEY present" || warn "DEEPSEEK_API_KEY missing (only affects direct DeepSeek fallback/batch; OpenCode Go stays fine)"
 

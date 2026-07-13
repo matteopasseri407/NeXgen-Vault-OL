@@ -226,7 +226,9 @@ if ([Environment]::GetEnvironmentVariable("N8N_MCP_TOKEN")) { ok "N8N_MCP_TOKEN 
 elseif (Test-ConnectorExpected "N8N_MCP_TOKEN") { bad "N8N_MCP_TOKEN missing" }
 else { ok "N8N_MCP_TOKEN not set - not expected in current Mode (Local-Only / n8n not configured)" }
 foreach ($v in @("VAULT_LIBRARY_TOKEN","VAULT_LIBRARY_URL")) {
-  if ([Environment]::GetEnvironmentVariable($v)) { ok "$v present" } else { bad "$v missing" }
+  if ([Environment]::GetEnvironmentVariable($v)) { ok "$v present" }
+  elseif (Test-ConnectorExpected "VAULT_LIBRARY_URL") { bad "$v missing" }
+  else { ok "$v not set - not expected in current Mode (Local-Only / vault-library not configured)" }
 }
 if ($env:DEEPSEEK_API_KEY) { ok "DEEPSEEK_API_KEY present" } else { warn "DEEPSEEK_API_KEY missing (OpenCode's default DeepSeek won't start)" }
 
@@ -404,15 +406,20 @@ if (Test-Path -LiteralPath $OcJson) {
 sec "Local model (host-aware: routing worker only on Windows, tag chosen locally)"
 $ollama = Get-Command ollama -ErrorAction SilentlyContinue
 if ($ollama) {
-  # Same resolution order as local-model-agent.ps1: env -> local unsynced file -> historical default.
+  # Same resolution order as local-model-agent.ps1: env -> local unsynced
+  # file. No hardcoded model-name fallback: the local worker's model choice
+  # is entirely per-user (see LOCAL-WORKER.md), never imposed by this doctor.
   $workerModel = $env:LOCAL_WORKER_MODEL
   if (-not $workerModel) {
     $mf = Join-Path $HomeDir ".config\local-worker\model"
     if (Test-Path -LiteralPath $mf) { $workerModel = (Get-Content -LiteralPath $mf -TotalCount 1).Trim() }
   }
-  if (-not $workerModel) { $workerModel = "gemma4-12b-128k" }
-  $models = (& ollama list 2>$null) -join "`n"
-  if ($models -match [regex]::Escape($workerModel)) { ok "local worker '$workerModel' present in ollama list" } else { warn "local worker '$workerModel' not in ollama list (config: ~\.config\local-worker\model or LOCAL_WORKER_MODEL)" }
+  if (-not $workerModel) {
+    warn "local worker: no model configured (set LOCAL_WORKER_MODEL or ~\.config\local-worker\model) -- skipping presence check"
+  } else {
+    $models = (& ollama list 2>$null) -join "`n"
+    if ($models -match [regex]::Escape($workerModel)) { ok "local worker '$workerModel' present in ollama list" } else { warn "local worker '$workerModel' not in ollama list (config: ~\.config\local-worker\model or LOCAL_WORKER_MODEL)" }
+  }
 } else { warn "ollama not in PATH (local worker unavailable)" }
 
 sec "Claude hooks (vault checkpoint/briefing)"

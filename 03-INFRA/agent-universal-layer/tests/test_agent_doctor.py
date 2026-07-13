@@ -266,6 +266,42 @@ def test_configured_env_var_is_checked_even_when_mode_says_local_only(sandbox):
     assert _lines_with(result.stdout, "✗", "n8n-mcp (5678)"), result.stdout
 
 
+# ── vault-library Mode-gating in "Tokens in env" (beta-readiness review,
+# 2026-07-13) ───────────────────────────────────────────────────────────
+# The bug this closes: unlike N8N_MCP_TOKEN two lines above it, the
+# VAULT_LIBRARY_TOKEN/VAULT_LIBRARY_URL loop checked presence
+# unconditionally, with no connector_expected() gating at all. A Local-Only
+# install configured exactly as vault-write-architecture.md prescribes ("no
+# VPS, no vault-library MCP container") got 2 permanent, unfixable FAILs on
+# a component the architecture itself declares absent for that Mode.
+
+def test_local_only_vault_library_tokens_not_expected(sandbox):
+    _stub_curl_always_unreachable(sandbox)
+    _write_user_profile_mode(sandbox, "LOCAL-ONLY")
+
+    result = _run_doctor(sandbox)
+
+    assert "USER-PROFILE.md declares Mode: LOCAL-ONLY" in result.stdout, result.stdout
+    assert not _lines_with(result.stdout, "✗", "VAULT_LIBRARY_TOKEN missing"), result.stdout
+    assert not _lines_with(result.stdout, "✗", "VAULT_LIBRARY_URL missing"), result.stdout
+    assert _lines_with(result.stdout, "✓", "VAULT_LIBRARY_TOKEN not set"), result.stdout
+    assert _lines_with(result.stdout, "✓", "VAULT_LIBRARY_URL not set"), result.stdout
+
+
+def test_cloud_server_missing_vault_library_tokens_really_fail(sandbox):
+    """Guard against over-fixing: a genuine Cloud-Server misconfiguration
+    (tokens unset, Mode declares CLOUD-SERVER) must still FAIL for real,
+    not be silently waved through by the same fix that frees Local-Only."""
+    _stub_curl_always_unreachable(sandbox)
+    _write_user_profile_mode(sandbox, "CLOUD-SERVER")
+
+    result = _run_doctor(sandbox)
+
+    assert "USER-PROFILE.md declares Mode: CLOUD-SERVER" in result.stdout, result.stdout
+    assert _lines_with(result.stdout, "✗", "VAULT_LIBRARY_TOKEN missing"), result.stdout
+    assert _lines_with(result.stdout, "✗", "VAULT_LIBRARY_URL missing"), result.stdout
+
+
 # ── Bearer token off curl's argv (security audit finding, LOW) ───────────
 # The vault-library reachability probe used to pass
 # `-H "Authorization: Bearer $VAULT_LIBRARY_TOKEN"` straight on curl's argv,
