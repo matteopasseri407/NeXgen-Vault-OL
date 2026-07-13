@@ -880,6 +880,20 @@ def utils(env: Env) -> bool:
     skill_source = env.engine_scripts / "agent-skill.py"
     if not IS_WINDOWS:
         healthy = True
+        # agent-sync/agent-doctor themselves, not just the tools they manage:
+        # utils() is a phase THIS SAME agent-sync run executes, so the first
+        # invocation ever has to happen by full path (INIT.md already
+        # documents that correctly) -- but nothing then created the bare
+        # command for every run after. Two concrete real-world consequences,
+        # not just tidiness: _install_systemd_units() (below) writes the
+        # recurring guard timer's ExecStart as bare '.local/bin/agent-sync
+        # guard', which pointed at a symlink no code path ever created; and
+        # _persisted_engine_root() reads that same symlink to detect an
+        # existing engine-root cutover, silently dead for anyone who never
+        # got a working one. Same bug class as vault-groom/firecrawl-local
+        # (2026-07-13 review), just not caught in that pass.
+        healthy = _link_util(env.engine_scripts / "agent-sync.sh", env.local_bin / "agent-sync", env, "agent-sync") and healthy
+        healthy = _link_util(env.engine_scripts / "agent-doctor.sh", env.local_bin / "agent-doctor", env, "agent-doctor") and healthy
         healthy = _link_util(env.engine_scripts / "agent-now.sh", env.local_bin / "agent-now", env, "agent-now") and healthy
         healthy = _link_util(env.engine_scripts / "council.sh", env.local_bin / "council", env, "council") and healthy
         # Linux/Mac only by design (no .ps1 twin ships) -- README/AGENTS.md/
@@ -905,6 +919,8 @@ def utils(env: Env) -> bool:
     # ported to Windows at all, not just never linked -- out of scope for
     # today's fix, flagged separately). Only link what actually exists.
     for name, src_dir in (
+        ("agent-sync", env.engine_scripts),
+        ("agent-doctor", env.engine_scripts),
         ("agent-now", env.engine_scripts),
         ("council", env.engine_scripts),
         ("vault-groom", env.vault_scripts),
@@ -1031,6 +1047,20 @@ def _install_systemd_units(env: Env) -> bool:
     unit_dir.mkdir(parents=True, exist_ok=True)
     changed = False
     healthy = True
+    # Defense in depth, not the primary fix: utils() (which links the bare
+    # agent-sync command this timer's ExecStart depends on) always runs
+    # before this function in the same apply/guard phases list, so this
+    # should never actually fire. It exists for the one edge case where
+    # utils() partially fails on an unrelated required link and the phase
+    # loop (which does not abort on a single phase's failure) still reaches
+    # this one in the same pass -- silent instead of a loud, findable log
+    # line otherwise.
+    if not (env.local_bin / "agent-sync").exists():
+        env.log(
+            "systemd: WARNING -- ~/.local/bin/agent-sync does not exist yet; "
+            "the timer's ExecStart references it anyway and will fail until "
+            "utils() successfully links it on a future guard run"
+        )
     for path, content, label in (
         (unit_dir / "agent-sync.service", _systemd_service_content(env), "agent-sync.service set to pull mode"),
         (unit_dir / "agent-sync.timer", _SYSTEMD_TIMER, "agent-sync.timer updated"),

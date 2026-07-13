@@ -625,6 +625,83 @@ def test_host_wide_lock_rejects_second_manual_run(sandbox, monkeypatch):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink launcher behavior is covered on Linux and macOS.")
+def test_posix_utils_links_agent_sync_and_agent_doctor_launchers(sandbox, monkeypatch):
+    # Real gap found in a 2026-07-13 follow-up: agent-sync/agent-doctor were
+    # documented everywhere (README, INIT.md, both concept maps) as bare
+    # commands, but utils() -- the only code that links anything onto PATH
+    # -- never linked either one. The systemd guard timer's own ExecStart
+    # depends on the agent-sync symlink existing; _persisted_engine_root()
+    # reads it too. Same bug class already fixed for vault-groom/firecrawl-
+    # local, just missed in that pass.
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", False)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+
+    env = mod.Env()
+    mod.utils(env)
+
+    agent_sync_link = sandbox.home / ".local" / "bin" / "agent-sync"
+    agent_doctor_link = sandbox.home / ".local" / "bin" / "agent-doctor"
+    assert agent_sync_link.is_symlink()
+    assert agent_sync_link.resolve() == (sandbox.scripts_dir / "agent-sync.sh").resolve()
+    assert agent_doctor_link.is_symlink()
+    assert agent_doctor_link.resolve() == (sandbox.scripts_dir / "agent-doctor.sh").resolve()
+
+
+def test_windows_utils_installs_agent_sync_and_agent_doctor_command_wrappers(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("USERPROFILE", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+
+    env = mod.Env()
+    mod.utils(env)
+
+    for name in ("agent-sync", "agent-doctor"):
+        launcher = sandbox.home / ".local" / "bin" / f"{name}.ps1"
+        wrapper = sandbox.home / ".local" / "bin" / f"{name}.cmd"
+        assert launcher.exists(), f"{name}.ps1 not linked"
+        assert launcher.resolve() == (sandbox.scripts_dir / f"{name}.ps1").resolve()
+        assert f"{name}.ps1" in wrapper.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="systemd is a Linux-only recurring trigger; Windows uses schtasks.exe instead.")
+def test_systemd_install_warns_loudly_if_agent_sync_link_is_somehow_missing(sandbox, monkeypatch):
+    # utils() always runs before install_scheduler() in the same apply/guard
+    # pass, so this should never fire in practice -- but the phase loop does
+    # not abort on an unrelated phase failure, so this is the fallback that
+    # keeps a missing link from failing completely silently.
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", False)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+    monkeypatch.setattr(mod, "resolve_cmd", lambda name: None)  # no real systemctl in the sandbox
+
+    env = mod.Env()
+    # Deliberately skip utils() -- agent-sync was never linked this pass.
+    mod._install_systemd_units(env)
+
+    assert "agent-sync does not exist yet" in env.log_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="systemd is a Linux-only recurring trigger; Windows uses schtasks.exe instead.")
+def test_systemd_install_does_not_warn_once_agent_sync_is_linked(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", False)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+    monkeypatch.setattr(mod, "resolve_cmd", lambda name: None)
+
+    env = mod.Env()
+    mod.utils(env)
+    mod._install_systemd_units(env)
+
+    assert "agent-sync does not exist yet" not in env.log_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink launcher behavior is covered on Linux and macOS.")
 def test_posix_utils_links_council_launcher(sandbox, monkeypatch):
     mod = load_agent_sync_module(sandbox)
     monkeypatch.setattr(mod, "IS_WINDOWS", False)
