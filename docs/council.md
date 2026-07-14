@@ -87,6 +87,22 @@ when its seat is declared in the sequence. The OpenCode cost pre-check only
 reorders OpenCode candidates within their original decision-document order;
 it never promotes another provider merely because it has no OpenCode usage
 data.
+
+By default, a stage that returns `VERDICT: REJECT` stops the relay before
+the next stage runs — a reject means the plan already isn't worth building
+on, and running the remaining stages anyway would just spend quota on a plan
+the relay has already abandoned. Pass `--continue-on-reject` to run every
+declared stage regardless, if you want each seat's opinion no matter what an
+earlier stage concluded.
+
+Verdict parsing is positional, not textual search: only a response's last
+non-blank line can set that stage's verdict (markdown emphasis and terminal
+punctuation are tolerated; a quote prefix is not). So a stage that quotes an
+earlier stage's `VERDICT: REJECT` while reaching a different conclusion of
+its own is read as that different conclusion, not as a rejection, and a
+verdict cited mid-response — or a rejection quoted anywhere but the final
+line — no longer stops the relay. Only a seat's own standalone closing line
+does.
 ```bash
 council relay \
   "Design a rate limiter for the public API." \
@@ -111,6 +127,34 @@ rewrite the cross-machine seat configuration. A missing CLI, a different model,
 a different Codex effort, or a zero-retention restriction removes that candidate
 from the proposal with the reason instead of guessing a substitute.
 
+For a `codex` seat the check is concrete: Council reads
+`$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) and compares it
+against the seat's declared `model` and `reasoning_effort` with an exact
+string match — no fuzzy or semver-aware comparison. A mismatch names both
+sides and the file it read:
+
+- `il modello non è quello configurato in Codex (configurato: '<value in
+  config.toml>', seat: '<value in seats.yaml>', file: <path to config.toml>)`
+- `l'effort non coincide con la configurazione Codex (configurato: '<value in
+  config.toml>', seat: '<value in seats.yaml>', file: <path to config.toml>)`
+
+`claude` seats are excluded from the automated proposal by design, not by a
+gap: the Claude CLI does not expose a local, machine-readable list of the
+exact model it is currently configured for, the way `opencode models`,
+`agy models`, and `ollama list` do, so Council has nothing to verify a
+candidate against before showing it. The diagnostic reads `Claude non espone
+una lista locale del modello esatto, quindi non entra nella proposta
+automatizzata`. This only blocks the *proposal*: a `claude` seat remains
+fully usable with an explicit `--seat` (or inside a `--sequence`) exactly
+like any other seat — routing is a convenience layer on top of execution,
+never a gate on it.
+
+A `<candidate>: nessun seat locale associato` line under `routing-status` or
+`propose` means no seat in your `seats.yaml` declares that candidate's
+`routing_id` or `routing_label` — typically the routing document is
+proposing a model for a role you simply haven't declared a local seat for
+yet, not that anything is broken.
+
 The proposal never executes a model. `brainstorm`, `challenge`, and `code-review`
 require an explicit human `--seat`; `relay` requires an explicit human
 `--sequence`. The human decides the role, the model, and how many seats to call.
@@ -126,6 +170,17 @@ Use `--routing-role L-Sys` to ask for a different proposal. It still requires
 `--seat` before a single-seat invocation. `council propose --mode relay` lists
 the available candidates for the configured relay roles without invoking them.
 
+An explicit `--seat` bypasses the routing probe entirely — the human already
+decided, and every seat stays runnable this way regardless of what the
+proposal would or wouldn't show. For a `codex` seat specifically, Council
+still runs the same `config.toml` check as a non-blocking, informational
+courtesy: if the seat's declared model or effort no longer match Codex's
+current default, the call still goes through (forwarded explicitly with
+`-m`), but you are told your assumed default is stale instead of finding out
+some other way:
+`[council] avviso: il seat '<name>' non è il default corrente della CLI
+codex (<reason>); verrà inoltrato esplicitamente con -m.`
+
 ## Timeouts
 
 Every seat call is bounded by a conservative default of 300 seconds. Set a
@@ -137,6 +192,24 @@ infinite, and boolean values are rejected.
 ```bash
 council challenge "Review this plan" --seat gemini --timeout-seconds 90
 ```
+
+## Reasoning effort
+
+An optional `reasoning_effort: low|medium|high|xhigh|max|none` on a seat in
+`seats.yaml` is forwarded to that seat's CLI. The mapping is one source per
+CLI, shared between the actual command and every place that prints the
+effort label, so the two can't drift apart:
+
+- `claude`: `--effort <value>`, verbatim.
+- `codex`: `-c model_reasoning_effort=<value>`, verbatim.
+- `opencode`: `--variant <value>`, verbatim (provider-specific; no fixed
+  enum to validate against locally).
+- `ollama`: `--think` only documents `low`/`medium`/`high`. `xhigh` and
+  `max` are downmapped to `--think high`, with the printed label saying so.
+  Any other value is dropped with no flag, and the label says that too.
+- `agy`: has no reasoning-effort flag at all. The value is never forwarded;
+  the label reads "(non applicato da questa CLI)" instead of silently
+  looking identical to a seat that actually forwarded it.
 
 ## Session handling
 
@@ -178,10 +251,13 @@ council clean --all           # removes every kept session now
 
 ## Current limitations
 
-- `codex` seats are implemented but not yet verified live end-to-end because
-  no OpenAI quota was available when they were wired in. They have only a
-  code review. `opencode` and `agy` seats are verified live on all three
-  non-relay modes.
+- `codex` seats are verified live: a `challenge` was sent live to a real
+  codex seat (2026-07-13), and reviewing that live run is how several bugs
+  fixed since then were found. `opencode` and `agy` seats are also verified
+  live on all three non-relay modes. What is not yet verified live is a
+  *full* multi-vendor `relay` end-to-end — CLIs from different vendors
+  handing off to each other within one staffage. That's the next step, in
+  progress.
 - Automated regression tests cover the control flow for all four modes,
   session cleanup, relay fallback, and the Linux launcher. They use fake
   seats, so they do not replace live checks of each vendor CLI.

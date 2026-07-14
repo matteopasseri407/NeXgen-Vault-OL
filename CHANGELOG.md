@@ -60,6 +60,17 @@ implementation waves with adversarial re-review.
   multi-vendor run died on codex's trusted-directory startup check);
   `council relay --continue-on-reject` to run the full stage sequence
   despite an intermediate rejection.
+- Council: a non-blocking notice when an explicit `--seat` resolves to a
+  `codex` seat whose model/effort no longer match Codex's own
+  `config.toml` default — the call still goes through (forwarded
+  explicitly with `-m`), but you're told your assumed default is stale
+  instead of finding out some other way.
+- Routing-resolver test coverage closes the gaps an audit found: the real
+  `codex` `config.toml` probe (match, model mismatch, effort mismatch,
+  missing/malformed config), the fixed `claude`-exclusion reason, the
+  explicit zero-retention STOP path, every `RoutingContractError` branch in
+  both the legacy table and JSON contract parsers, and
+  `cmd_routing_status`'s blocked-role diagnostics.
 - An import-ready n8n workflow
   (`03-INFRA/deploy/n8n/workflows/vault-grooming-reminder.json`) for the
   gardener's 14-day reminder. Reminder-only by design — the grooming pass
@@ -85,6 +96,15 @@ implementation waves with adversarial re-review.
   source per CLI: `--think` for ollama (with `xhigh`/`max` downmapped to
   `high`, labeled), `--variant` for opencode, and an explicit "(non
   applicato da questa CLI)" for agy.
+- `docs/council.md` now matches actual behavior instead of a stale draft:
+  `codex` seats' live-verification status (a `challenge` relayed to a real
+  seat is verified; a full multi-vendor `relay` end-to-end is not, yet),
+  the relay's default stop-on-`VERDICT: REJECT` and its
+  `--continue-on-reject` escape hatch, the concrete `codex`
+  `config.toml` probe rule with its exact diagnostic strings, why `claude`
+  seats are excluded from the automated proposal but stay usable with an
+  explicit `--seat`, and the positional VERDICT parsing / per-CLI
+  reasoning-effort-forwarding rules.
 - Every subprocess the sync control plane runs while holding the
   host-wide lock now has a timeout (`schtasks`, `systemctl`, `mklink`,
   `pgrep`/`tasklist`, `notify-send`) — the same hang class the 0.4.0
@@ -125,6 +145,14 @@ implementation waves with adversarial re-review.
 - One malformed name in `KNOWLEDGE_VAULT_MIRRORS` skips that mirror with
   a warning instead of failing the whole push, matching the pre-port
   behavior.
+- Council's `codex` probe mismatch messages named neither the configured
+  model/effort nor where to look; both now name the configured value, the
+  seat's requested value, and the `config.toml` path they came from.
+- Council's shutdown cleanup only had a `SIGTERM` handler: a `SIGINT`
+  delivered solely to `council.py`'s own pid (a supervisor, a timeout
+  manager, another agent interrupting just this process) left the vendor
+  CLI child orphaned. `SIGINT` now runs through the same
+  cleanup-then-re-raise path as `SIGTERM`.
 - Kept from the earlier, pre-review cut of this section: `agent-doctor`'s
   "Tokens in env" check Mode-gated for `vault-library`; OpenCode's
   bootstrap-instructions pointer actually written; `bootstrap-vps.sh`
