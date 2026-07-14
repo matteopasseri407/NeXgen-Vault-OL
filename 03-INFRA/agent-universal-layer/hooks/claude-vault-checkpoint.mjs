@@ -32,9 +32,8 @@ process.stdin.on("end", () => {
     if (source === "resume" || source === "compact") {
       context = [
         "[KnowledgeVault briefing] This session resumed or its context was just compacted.",
-        "If the task touches the user's world, re-orient first with ONE targeted read:",
-        "vault-library get_start_here, then 04-NOW/current-focus, and recent_activity for what changed recently.",
-        "Do not reload the whole vault.",
+        "If the task touches the user's world, re-ground per AGENTS.md 'Probe first' before acting:",
+        "one targeted vault read (get_start_here, then 04-NOW/current-focus, recent_activity), not a full reload.",
       ].join(" ");
     }
   }

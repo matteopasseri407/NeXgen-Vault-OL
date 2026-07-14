@@ -23,16 +23,12 @@ equally.
   exist: name, provider, the env var they map to, scope, last-rotated date.
   **Never any values.** Tracked in git so the map stays in sync across machines.
 
-## Workflow (mirrors AGENTS.md → Secrets)
+## Workflow
 
-Whenever you create, discover, rotate, or materially change a secret:
-
-1. Update the encrypted archive.
-2. Update `secrets-registry.md` (name + env var, no value).
-3. Do both before considering the task done.
-
-If the passphrase isn't available, say so and leave a pending line in the
-registry. Never paste a value into a normal vault note or a final summary.
+The secrets workflow — when to update the archive and the registry, and the
+"do both before the task is done" rule — is defined once in `AGENTS.md` →
+Secrets. This file does not restate that policy; it only covers the local GPG
+mechanics below.
 
 ## Handling the encrypted archive (GPG)
 

@@ -1,0 +1,50 @@
+# ============================================================================
+# SKILLS MANIFEST (example)  ·  agent-universal-layer — single source of truth
+# ----------------------------------------------------------------------------
+# Copy this file to `skills.manifest.yaml` in the same folder, then edit it to
+# declare every "chosen" skill ONCE. `skills-sync.py` materializes each entry
+# into the non-discovered library `~/.agents/skill-library/` and builds only the
+# runtime views you deliberately ask for. You choose here; the rest is synced.
+#
+#   cp skills.manifest.yaml.example skills.manifest.yaml
+#
+# Workflow ("choose a skill once -> it's everywhere"):
+#   1. add an entry under `skills:` below
+#   2. git commit + push (so every machine sees it)
+#   3. on each machine: git pull && python3 03-INFRA/scripts/skills-sync.py --apply
+#      (or just let `agent-sync guard` run it for you)
+#
+# RULES (these mirror the MCP manifest, mcp/manifest.yaml):
+#   origin: vault   -> vendored inside this repo at
+#                      03-INFRA/agent-universal-layer/skills/<name>/ ; git
+#                      carries it to every machine. Use for skills you own/edit.
+#   origin: github  -> third-party, NOT vendored: inventoried here only. Every
+#                      entry needs the FULL commit SHA, so the exact bytes always
+#                      reinstall from the same upstream revision (restorable).
+#   targets:  the runtimes that get a native view of the skill, e.g. [claude].
+#             Codex / OpenCode / Antigravity use the universal `agent-skill
+#             find|show` command instead of a native view.
+#   exposure: manual (default — invisible to eager runtimes, loaded lazily) or
+#             core (the single exception, visible under ~/.agents/skills).
+#
+# ADDITIVE by design: unregistered legacy skills are never deleted.
+# `skills-sync.py --apply --migrate-legacy` quarantines them locally, out of the
+# discovery roots, until you promote or discard them.
+# Per-owner / team skills (only sync on their owner's machine): see docs/team.md.
+# ============================================================================
+
+skills:
+
+  # --- example: a third-party skill, inventoried by pinned commit ------------
+  # humanizer:
+  #   origin: github
+  #   repo: <owner>/<repo>
+  #   commit: <full-40-character-commit-sha>   # required for origin: github
+  #   targets: [claude]
+  #   exposure: manual
+
+  # --- example: your own skill, vendored in this repo under skills/<name>/ ----
+  # my-custom-skill:
+  #   origin: vault
+  #   targets: [claude]
+  #   exposure: manual
