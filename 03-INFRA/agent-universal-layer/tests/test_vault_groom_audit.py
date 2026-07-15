@@ -93,8 +93,10 @@ def _run_audit(vault, clone, base, state_dir, *, env_overrides=None, **overrides
     if env_overrides:
         env = dict(os.environ)
         env.update(env_overrides)
+    import sys
+    exe = sys.executable or "python3"
     return subprocess.run(
-        ["python3", str(AUDIT_SCRIPT), *cli_args],
+        [exe, str(AUDIT_SCRIPT), *cli_args],
         capture_output=True, text=True, timeout=30, env=env,
     )
 

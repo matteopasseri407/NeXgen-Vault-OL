@@ -303,13 +303,22 @@ def run_publish(vault: str, engine_scripts: str) -> subprocess.CompletedProcess:
     """
     env = dict(os.environ)
     env["KNOWLEDGE_VAULT_PATH"] = vault
-    return subprocess.run(
-        [sys.executable, str(Path(engine_scripts) / "agent_sync.py"), "publish"],
-        cwd=vault,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    exe = sys.executable
+    if not exe or not os.path.exists(exe):
+        import shutil
+        exe = shutil.which("python3") or shutil.which("python") or "python"
+        
+    try:
+        return subprocess.run(
+            [exe, str(Path(engine_scripts) / "agent_sync.py"), "publish"],
+            cwd=vault,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as e:
+        print(f"vault-groom: could not launch agent_sync.py publish: {e}", file=sys.stderr)
+        raise
 
 
 def write_quarantine_marker(clone: str, reason: str, timestamp: str) -> None:
@@ -535,8 +544,16 @@ def main() -> int:
     # Quarantined (failed) clones are deliberately NOT touched by this.
     # GROOM_KEEP_CLONE=1 skips the removal (debugging/inspection).
     if os.environ.get("GROOM_KEEP_CLONE") != "1":
+        def _on_rm_error(func, path, exc_info):
+            import stat
+            try:
+                os.chmod(path, stat.S_IWRITE)
+                func(path)
+            except OSError:
+                pass
         try:
-            shutil.rmtree(args.clone)
+            # onexc is available in Python 3.12+, fallback to onerror for older versions
+            shutil.rmtree(args.clone, onerror=_on_rm_error)
         except OSError as exc:
             print(f"vault-groom: could not remove the promoted clone ({exc}) -- safe to delete by hand: {args.clone}", file=sys.stderr)
 

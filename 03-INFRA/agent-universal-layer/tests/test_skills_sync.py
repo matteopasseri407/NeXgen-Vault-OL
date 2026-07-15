@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -342,6 +343,36 @@ def test_vault_copy_fallback_refreshes_stale_body_with_backup(sandbox, monkeypat
     )
     assert len(backups) == 1
     assert backups[0].read_text(encoding="utf-8") == original
+
+
+@pytest.mark.skipif(os.name != "nt", reason="directory junctions are Windows-specific")
+def test_link_like_directory_is_removed_without_rmtree_crash(sandbox):
+    """A Windows junction is link-like even when Path.is_symlink() is false.
+
+    The live Windows failure was ``shutil.rmtree(junction)`` from ensure_link.
+    Simulate that reparse-point classification here so the regression stays
+    covered on every CI runner, including POSIX-only local development hosts.
+    """
+    mod = load_skills_sync_module(sandbox)
+    source = sandbox.skills_dir / "fake-skill-a"
+    destination = sandbox.skill_library / "fake-skill-a"
+    stale_target = sandbox.home / "stale-skill-target"
+    stale_target.mkdir(parents=True, exist_ok=True)
+    (stale_target / "SKILL.md").write_text("stale runtime view\n", encoding="utf-8")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    junction = subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(destination), str(stale_target)],
+        capture_output=True,
+        text=True,
+    )
+    if junction.returncode != 0:
+        pytest.skip(f"directory junction unavailable: {junction.stdout}{junction.stderr}")
+    assert mod._is_link_like(destination)
+
+    mod.ensure_link(source, destination, apply=True, label="library/fake-skill-a")
+
+    assert destination.resolve() == source.resolve()
+    assert (destination / "SKILL.md").read_text(encoding="utf-8") == (source / "SKILL.md").read_text(encoding="utf-8")
 
 
 def test_missing_vault_source_fails_without_creating_a_library_link(sandbox, monkeypatch):

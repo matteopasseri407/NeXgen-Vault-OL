@@ -8,6 +8,16 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## [0.5.2] - 2026-07-15
+
+Fix robustezza per il porting Windows (isolamento environment e junction NTFS).
+
+### Fixed (Windows)
+
+- Risolto `WinError 2` su Windows durante il subprocess call per `agent_sync.py publish`. Ora la chiamata sfrutta il fallback robusto su `shutil.which` ignorando path fittizi imposti durante l'isolamento dei test (fake `$USERPROFILE`).
+- Risolto `WinError 5` su Windows per la mancata eliminazione (access denied) degli oggetti git read-only dentro `.git/objects` durante il `vault_groom_audit.py` aggiungendo un check robusto sui flag di read/write file attributes.
+- Introdotto corretto unlinking per le Junction directory NTFS in `skills-sync.py`, aggirando i fallimenti generati da `shutil.rmtree` quando incontra i reparse point di Windows.
+
 ## [0.5.1] - 2026-07-15
 
 A live-verification and correctness pass, one day after 0.5.0's first real

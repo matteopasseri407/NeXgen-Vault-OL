@@ -80,6 +80,12 @@ RUNTIME = {
     "codex": HOME / ".codex" / "skills",
 }
 IS_WINDOWS = platform.system() == "Windows"
+# Windows directory junctions are reparse points.  On older supported Python
+# versions (and on some junction shapes in newer ones), Path.is_symlink() is
+# false even though unlink/rmdir is the safe removal operation.  Keep the
+# adapter here in sync with agent_sync.py so a stale Claude junction is never
+# handed to shutil.rmtree().
+_REPARSE_POINT = 0x0400
 GIT_CLONE_TIMEOUT_SECONDS = 60
 # Codex has no native progressive-disclosure mechanism the way Claude does:
 # its "lazy" guarantee is entirely the discipline of keeping RUNTIME["codex"]
@@ -126,10 +132,39 @@ def sec(m):
     print(f"\n\033[1m{m}\033[0m")
 
 
-def resolves_to(link: Path, target: Path) -> bool:
-    """True if `link` is a symlink that resolves to `target`."""
+def _is_link_like(path: Path) -> bool:
+    """Recognize symlinks and Windows directory junctions without following them."""
+    if path.is_symlink():
+        return True
+    if not IS_WINDOWS:
+        return False
+    is_junction = getattr(path, "is_junction", None)
     try:
-        return link.is_symlink() and link.resolve() == target.resolve()
+        if callable(is_junction) and is_junction():
+            return True
+        attributes = getattr(os.lstat(path), "st_file_attributes", 0)
+        return bool(attributes & _REPARSE_POINT)
+    except OSError:
+        return False
+
+
+def _remove_path(path: Path) -> None:
+    """Remove a file, real directory, symlink, or Windows junction safely."""
+    if _is_link_like(path):
+        try:
+            path.unlink()
+        except OSError:
+            path.rmdir()
+    elif path.is_dir():
+        shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
+
+
+def resolves_to(link: Path, target: Path) -> bool:
+    """True if `link` is a link-like path that resolves to `target`."""
+    try:
+        return _is_link_like(link) and link.resolve() == target.resolve()
     except OSError:
         return False
 
@@ -212,7 +247,7 @@ def ensure_link(src: Path, dst: Path, apply: bool, label: str) -> None:
     if resolves_to(dst, src):
         ok(f"{label}: already aligned")
         return
-    if dst.exists() and not dst.is_symlink():
+    if dst.exists() and not _is_link_like(dst):
         if not dst.is_dir() or not (dst / "SKILL.md").is_file():
             warn(f"{label}: exists as a real folder with no SKILL.md, not touching it (check by hand)")
             return
@@ -229,14 +264,14 @@ def ensure_link(src: Path, dst: Path, apply: bool, label: str) -> None:
         except OSError as exc:
             fail(f"{label}: cannot back up stale real copy before refresh: {exc}")
             return
-        shutil.rmtree(dst)
+        _remove_path(dst)
         act(f"{label}: backed up stale real copy to {backup.name}")
     # dst is missing or a broken/wrong symlink here: (re)create it.
     if not apply:
         act(f"{label}: would create link -> {src}")
         return
-    if dst.is_symlink() or dst.exists():
-        dst.unlink()
+    if _is_link_like(dst) or dst.exists():
+        _remove_path(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:
         dst.symlink_to(src, target_is_directory=True)
