@@ -87,17 +87,12 @@ IS_WINDOWS = platform.system() == "Windows"
 # handed to shutil.rmtree().
 _REPARSE_POINT = 0x0400
 GIT_CLONE_TIMEOUT_SECONDS = 60
-# Codex has no native progressive-disclosure mechanism the way Claude does:
-# its "lazy" guarantee is entirely the discipline of keeping RUNTIME["codex"]
-# near-empty (only rare `exposure: core` entries), not a CLI-side mechanism
-# that loads bodies on demand. A big `core` skill landing there defeats that
-# discipline silently -- this is the tripwire for it (2026-07-13 review).
-CODEX_CORE_SIZE_WARN_BYTES = 4096
-# Several core skills can each stay under the per-skill guideline above and
-# still pile up into a large eagerly-scanned directory for Codex. The
-# aggregate is the actual thing that hurts (total bytes Codex reads on every
-# run), so it gets its own, independent tripwire.
-CODEX_CORE_AGGREGATE_WARN_BYTES = 8192
+# Codex natively progressive-discloses discovered skills: the startup catalog
+# contains metadata, while the full SKILL.md body is opened only after a skill
+# is selected. NeXgen deliberately keeps `manual` skills outside discovery
+# anyway, because its stronger cross-CLI contract is a tiny initial catalog
+# plus explicit `agent-skill find/show` routing. Body byte size is therefore
+# not an eager-startup metric and must not be reported as one.
 GIT_COMMIT_SHA = re.compile(r"[0-9a-fA-F]{40}\Z")
 TEAM_MEMBERS_HEADING_RE = re.compile(r"(?im)^##\s+team members\b")
 
@@ -284,9 +279,9 @@ def ensure_link(src: Path, dst: Path, apply: bool, label: str) -> None:
 
 def ensure_absent_link(dst: Path, apply: bool, label: str) -> None:
     """Remove one managed manual view without touching a real local folder."""
-    if dst.is_symlink():
+    if _is_link_like(dst):
         if apply:
-            dst.unlink()
+            _remove_path(dst)
             act(f"{label}: link removed (manual skill, loaded on demand)")
         else:
             act(f"{label}: would remove the link (manual, lazy)")
@@ -541,25 +536,33 @@ def migrate_legacy_views(apply: bool, skills: dict[str, dict]) -> None:
             if not _has_skill_body(entry):
                 continue
             # A managed view is already backed by the library. Keep views that
-            # the manifest still declares. Remove only stale managed links,
-            # never a real local folder. In particular, Claude's native-lazy
-            # manual links must survive the migration.
+            # the manifest still declares. Windows may have to materialize a
+            # byte-identical real copy when symlink creation is unavailable;
+            # that copy is generated state too, not a legacy eager folder.
+            # Remove only stale managed links, never a real local folder. In
+            # particular, Claude's native-lazy manual views must survive the
+            # migration in either representation.
             managed = LIBRARY / entry.name
-            if resolves_to(entry, managed):
-                spec = skills.get(entry.name, {})
-                targets = spec.get("targets", [])
-                exposure = spec.get("exposure", "manual")
-                expected = (
-                    (scope == "shared" and exposure == "core")
-                    or (scope == "claude" and "claude" in targets)
-                    or (scope == "codex" and exposure == "core" and "codex" in targets)
-                )
-                if expected:
-                    ok(f"legacy/{scope}/{entry.name}: declared managed view kept")
-                    continue
-                if entry.is_symlink():
+            spec = skills.get(entry.name, {})
+            targets = spec.get("targets", [])
+            exposure = spec.get("exposure", "manual")
+            expected = (
+                (scope == "shared" and exposure == "core")
+                or (scope == "claude" and "claude" in targets)
+            )
+            managed_link = resolves_to(entry, managed)
+            managed_copy = (
+                not _is_link_like(entry)
+                and managed.is_dir()
+                and same_tree_content(managed, entry)
+            )
+            if expected and (managed_link or managed_copy):
+                ok(f"legacy/{scope}/{entry.name}: declared managed view kept")
+                continue
+            if managed_link:
+                if _is_link_like(entry):
                     if apply:
-                        entry.unlink()
+                        _remove_path(entry)
                         act(f"legacy/{scope}/{entry.name}: removed stale managed view")
                     else:
                         act(f"legacy/{scope}/{entry.name}: would remove stale managed view")
@@ -756,7 +759,6 @@ def main() -> int:
     # state of the Claude runtime: symlink-folder pointing at the library?
     claude_is_library_link = resolves_to(RUNTIME["claude"], LIBRARY)
     team_mode = team_mode_active()
-    codex_core_total_bytes = 0
     for name, spec in skills.items():
         sec(f"skill: {name}")
 
@@ -801,7 +803,7 @@ def main() -> int:
             fail(f"unknown origin '{origin}' for {name}")
             continue
 
-        # 2) expose only core skills through the eager shared root. Manual
+        # 2) expose only core skills through the shared discovery root. Manual
         # skills stay in the non-discovered library and are read with
         # `agent-skill show <name>`.
         if exposure == "core":
@@ -809,41 +811,20 @@ def main() -> int:
         else:
             ensure_absent_link(ACTIVE / name, apply, f"active/{name}")
 
-        # 3) Claude is the native lazy runtime. It may see its declared
-        # skills directly. Codex gets only explicit core views; OpenCode,
-        # Antigravity and local workers use the universal command/catalog.
+        # 3) Claude may see all declared native-lazy views. Codex discovers
+        # core skills through the official shared root above; do not mirror
+        # them into the legacy ~/.codex/skills root or Codex will catalog the
+        # same skill twice. Other runtimes use the universal command/catalog.
         for t in targets:
             if t == "claude":
                 if claude_is_library_link:
                     ok("claude: covered (whole-library lazy view)")
                 else:
                     ensure_link(LIBRARY / name, RUNTIME["claude"] / name, apply, f"claude/{name}")
-            elif t == "codex" and exposure == "core":
-                ensure_link(LIBRARY / name, RUNTIME["codex"] / name, apply, f"codex/{name}")
-                skill_md = LIBRARY / name / "SKILL.md"
-                if skill_md.is_file():
-                    size = skill_md.stat().st_size
-                    codex_core_total_bytes += size
-                    if size > CODEX_CORE_SIZE_WARN_BYTES:
-                        warn(
-                            f"codex/{name}: SKILL.md is {size}B, over the "
-                            f"{CODEX_CORE_SIZE_WARN_BYTES}B core-on-Codex guideline -- Codex has no "
-                            "native lazy loading, so this sits in its eagerly-scanned directory on "
-                            "every run. Consider exposure: manual (read via `agent-skill show`) "
-                            "instead of core if Codex doesn't need this every session."
-                        )
             elif t == "codex":
-                ensure_absent_link(RUNTIME["codex"] / name, apply, f"codex/{name}")
+                ensure_absent_link(RUNTIME["codex"] / name, apply, f"codex-legacy/{name}")
             else:
                 warn(f"unknown target '{t}'")
-
-    if codex_core_total_bytes > CODEX_CORE_AGGREGATE_WARN_BYTES:
-        warn(
-            f"codex: core skills total {codex_core_total_bytes}B in its eagerly-scanned "
-            f"directory, over the {CODEX_CORE_AGGREGATE_WARN_BYTES}B aggregate guideline -- "
-            "each one can be under the per-skill limit and still add up on every run. Consider "
-            "demoting rarely-used ones to exposure: manual (read via `agent-skill show`)."
-        )
 
     sec("universal catalog")
     write_index(apply)

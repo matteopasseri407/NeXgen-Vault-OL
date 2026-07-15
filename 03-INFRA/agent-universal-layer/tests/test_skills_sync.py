@@ -67,7 +67,7 @@ def test_manual_skill_stays_out_of_eager_views_but_claude_gets_native_lazy_acces
     assert not (sandbox.home / ".codex" / "skills" / "fake-skill-a").exists()
 
 
-def test_core_skill_is_the_only_kind_exposed_to_eager_views(sandbox, monkeypatch):
+def test_core_skill_uses_only_the_official_shared_codex_root(sandbox, monkeypatch):
     (sandbox.skills_dir / "skills.manifest.yaml").write_text(
         "skills:\n"
         "  fake-skill-a:\n"
@@ -82,14 +82,13 @@ def test_core_skill_is_the_only_kind_exposed_to_eager_views(sandbox, monkeypatch
     assert mod.main() == 0
     library = sandbox.skill_library / "fake-skill-a"
     assert (sandbox.active_skills / "fake-skill-a").resolve() == library.resolve()
-    assert (sandbox.home / ".codex" / "skills" / "fake-skill-a").resolve() == library.resolve()
+    assert not (sandbox.home / ".codex" / "skills" / "fake-skill-a").exists()
 
 
-def test_oversized_core_skill_targeted_at_codex_warns_it_has_no_native_lazy_loading(sandbox, monkeypatch, capsys):
-    # Codex has no progressive-disclosure mechanism like Claude's: its "lazy"
-    # guarantee is entirely the discipline of keeping RUNTIME["codex"] near
-    # empty. A big `core` skill defeats that discipline silently unless this
-    # warns (2026-07-13 review finding).
+def test_codex_core_body_size_is_not_reported_as_eager_startup_cost(sandbox, monkeypatch, capsys):
+    # Codex progressive-discloses the full body. NeXgen still limits the
+    # discovered catalog to explicit core entries, but body size itself is
+    # paid only when the matching skill is selected.
     (sandbox.skills_dir / "fake-skill-a" / "SKILL.md").write_text(
         "---\ndescription: oversized on purpose\n---\n" + ("x " * 3000) + "\n",
         encoding="utf-8",
@@ -107,79 +106,9 @@ def test_oversized_core_skill_targeted_at_codex_warns_it_has_no_native_lazy_load
 
     assert mod.main() == 0
     out = capsys.readouterr().out
-    assert "codex/fake-skill-a" in out
-    assert "no native lazy loading" in out
-    assert "exposure: manual" in out
-
-
-def _write_fake_skill(sandbox, name: str, body_bytes: int) -> None:
-    skill_dir = sandbox.skills_dir / name
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    header = f"---\ndescription: {name} fixture\n---\n"
-    (skill_dir / "SKILL.md").write_text(header + ("x" * body_bytes) + "\n", encoding="utf-8")
-
-
-def test_several_undersized_core_skills_on_codex_trigger_the_aggregate_warning(sandbox, monkeypatch, capsys):
-    # Each skill individually stays under CODEX_CORE_SIZE_WARN_BYTES (4096B),
-    # so the per-skill warning must stay silent -- but three of them together
-    # cross CODEX_CORE_AGGREGATE_WARN_BYTES (8192B), which is the actual cost
-    # Codex pays on every run (2026-07-13 review finding).
-    for name in ("fake-skill-b", "fake-skill-c", "fake-skill-d"):
-        _write_fake_skill(sandbox, name, 3000)
-    (sandbox.skills_dir / "skills.manifest.yaml").write_text(
-        "skills:\n"
-        + "".join(
-            f"  {name}:\n    origin: vault\n    targets: [codex]\n    exposure: core\n"
-            for name in ("fake-skill-b", "fake-skill-c", "fake-skill-d")
-        ),
-        encoding="utf-8",
-    )
-    mod = load_skills_sync_module(sandbox)
-    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
-
-    assert mod.main() == 0
-    out = capsys.readouterr().out
     assert "no native lazy loading" not in out
-    assert "core skills total" in out
-    assert "aggregate guideline" in out
-    assert "exposure: manual" in out
-
-
-def test_core_skills_on_codex_under_the_aggregate_threshold_stay_silent(sandbox, monkeypatch, capsys):
-    for name in ("fake-skill-b", "fake-skill-c"):
-        _write_fake_skill(sandbox, name, 1000)
-    (sandbox.skills_dir / "skills.manifest.yaml").write_text(
-        "skills:\n"
-        + "".join(
-            f"  {name}:\n    origin: vault\n    targets: [codex]\n    exposure: core\n"
-            for name in ("fake-skill-b", "fake-skill-c")
-        ),
-        encoding="utf-8",
-    )
-    mod = load_skills_sync_module(sandbox)
-    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
-
-    assert mod.main() == 0
-    out = capsys.readouterr().out
-    assert "no native lazy loading" not in out
-    assert "core skills total" not in out
-
-
-def test_small_core_skill_targeted_at_codex_does_not_warn(sandbox, monkeypatch, capsys):
-    (sandbox.skills_dir / "skills.manifest.yaml").write_text(
-        "skills:\n"
-        "  fake-skill-a:\n"
-        "    origin: vault\n"
-        "    targets: [codex]\n"
-        "    exposure: core\n",
-        encoding="utf-8",
-    )
-    mod = load_skills_sync_module(sandbox)
-    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
-
-    assert mod.main() == 0
-    out = capsys.readouterr().out
-    assert "no native lazy loading" not in out
+    assert (sandbox.active_skills / "fake-skill-a" / "SKILL.md").is_file()
+    assert not (sandbox.home / ".codex" / "skills" / "fake-skill-a").exists()
 
 
 def _write_user_profile_with_team_members(sandbox) -> None:
@@ -311,6 +240,35 @@ def test_legacy_migration_keeps_declared_claude_lazy_view(sandbox, monkeypatch):
     assert claude_view.resolve() == library.resolve()
 
 
+def test_legacy_migration_keeps_managed_windows_copy_fallbacks(sandbox, monkeypatch):
+    """Declared views copied without symlink privilege are not legacy debt."""
+    (sandbox.skills_dir / "skills.manifest.yaml").write_text(
+        "skills:\n"
+        "  fake-skill-a:\n"
+        "    origin: vault\n"
+        "    targets: [claude, codex]\n"
+        "    exposure: core\n",
+        encoding="utf-8",
+    )
+
+    def fail_symlink(self, target, target_is_directory=False):
+        raise OSError("symlink privilege unavailable")
+
+    monkeypatch.setattr(Path, "symlink_to", fail_symlink)
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply", "--migrate-legacy"])
+
+    assert mod.main() == 0
+    library = sandbox.skill_library / "fake-skill-a"
+    shared_view = sandbox.active_skills / "fake-skill-a"
+    claude_view = sandbox.home / ".claude" / "skills" / "fake-skill-a"
+    assert mod.same_tree_content(library, shared_view)
+    assert mod.same_tree_content(library, claude_view)
+    assert not (sandbox.home / ".codex" / "skills" / "fake-skill-a").exists()
+    assert not (sandbox.skill_library / "legacy" / "shared" / "fake-skill-a").exists()
+    assert not (sandbox.skill_library / "legacy" / "claude" / "fake-skill-a").exists()
+
+
 def test_diff_does_not_create_lazy_views(sandbox, monkeypatch):
     mod = load_skills_sync_module(sandbox)
     monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py"])
@@ -373,6 +331,26 @@ def test_link_like_directory_is_removed_without_rmtree_crash(sandbox):
 
     assert destination.resolve() == source.resolve()
     assert (destination / "SKILL.md").read_text(encoding="utf-8") == (source / "SKILL.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="directory junctions are Windows-specific")
+def test_manual_skill_removes_a_windows_junction_without_touching_its_target(sandbox):
+    mod = load_skills_sync_module(sandbox)
+    source = sandbox.skills_dir / "fake-skill-a"
+    destination = sandbox.active_skills / "fake-skill-a"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    junction = subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(destination), str(source)],
+        capture_output=True,
+        text=True,
+    )
+    if junction.returncode != 0:
+        pytest.skip(f"directory junction unavailable: {junction.stdout}{junction.stderr}")
+
+    mod.ensure_absent_link(destination, apply=True, label="active/fake-skill-a")
+
+    assert not destination.exists()
+    assert (source / "SKILL.md").is_file()
 
 
 def test_missing_vault_source_fails_without_creating_a_library_link(sandbox, monkeypatch):
@@ -599,7 +577,7 @@ def test_valid_skill_names_with_dots_and_dashes_still_sync_normally(sandbox, mon
     assert (library / "SKILL.md").is_file()
     assert (sandbox.active_skills / "fake-skill-a").resolve() == library.resolve()
     assert (sandbox.home / ".claude" / "skills" / "fake-skill-a").resolve() == library.resolve()
-    assert (sandbox.home / ".codex" / "skills" / "fake-skill-a").resolve() == library.resolve()
+    assert not (sandbox.home / ".codex" / "skills" / "fake-skill-a").exists()
 
 
 def test_install_github_rejects_a_path_traversal_name_called_directly(sandbox):

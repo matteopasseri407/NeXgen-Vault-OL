@@ -15,6 +15,8 @@ $HomeDir = [Environment]::GetFolderPath("UserProfile")
 $Vault   = if ($env:KNOWLEDGE_VAULT_PATH) { $env:KNOWLEDGE_VAULT_PATH } else { Join-Path $HomeDir "KnowledgeVault" }
 $Branch  = if ($env:KNOWLEDGE_VAULT_BRANCH) { $env:KNOWLEDGE_VAULT_BRANCH } else { "main" }
 $Layer   = Join-Path $Vault "03-INFRA\agent-universal-layer"
+$EngineInfra = Split-Path -Parent $PSScriptRoot
+$RenderPy = Join-Path $EngineInfra "agent-universal-layer\mcp\render.py"
 $Canon   = Join-Path $Layer "instructions\AGENTS.md"
 $AppDataRoot = if ($env:APPDATA) { $env:APPDATA } else { Join-Path $HomeDir "AppData\Roaming" }
 $AppDataOcJson = Join-Path $AppDataRoot "opencode\opencode.json"
@@ -75,6 +77,21 @@ if (-not $Summary) { Write-Host "=== agent-doctor: agent alignment check ===" -F
 
 sec "Host"
 ok "detected: windows ($env:COMPUTERNAME)"
+try {
+  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+  $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+  $userPathLength = if ($userPath) { $userPath.Length } else { 0 }
+  $combinedPath = (@($machinePath, $userPath) | Where-Object { $_ }) -join ";"
+  $combinedPathLength = $combinedPath.Length
+  $processPathLength = if ($env:Path) { $env:Path.Length } else { 0 }
+  if (($userPathLength -gt 8191) -or ($combinedPathLength -gt 8191) -or ($processPathLength -gt 8191)) {
+    bad "PATH exceeds cmd.exe's 8191-character inherited-variable limit (user=$userPathLength, combined=$combinedPathLength, current-process=$processPathLength); shorten it and start a fresh shell before trusting Node/npm launchers"
+  } else {
+    ok "PATH length is safe for cmd.exe (user=$userPathLength, combined=$combinedPathLength, current-process=$processPathLength)"
+  }
+} catch {
+  warn "could not read the Windows User PATH length"
+}
 
 sec "Vault (memory) - authoritative remote and mirrors"
 if ($RemoteConfigError) { bad "invalid sync remote config - run: agent-sync config authoritative_remote" } else { ok "sync remote config resolved ($Remote)" }
@@ -286,8 +303,8 @@ foreach ($v in @("VAULT_LIBRARY_TOKEN","VAULT_LIBRARY_URL")) {
 if ($env:DEEPSEEK_API_KEY) { ok "DEEPSEEK_API_KEY present" } else { warn "DEEPSEEK_API_KEY missing (OpenCode's default DeepSeek won't start)" }
 
 sec "MCP configured in the runtimes (Vault 2.0 drift detection)"
-if ((Get-Command "python" -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath "$Layer\mcp\render.py")) {
-  $renderOut = python "$Layer\mcp\render.py" 2>&1
+if ((Get-Command "python" -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $RenderPy)) {
+  $renderOut = python $RenderPy 2>&1
   if ($LASTEXITCODE -ne 0) {
     # A crash here (missing PyYAML, a broken manifest, a permission error...)
     # must never read as "no drift found": empty/error output would otherwise
@@ -313,7 +330,7 @@ if ((Get-Command "python" -ErrorAction SilentlyContinue) -and (Test-Path -Litera
       bad "MCP drift detected against the canonical manifest (ERROR)"
       warn "MCP drift detail: $($driftLines.Count) entries"
     } else {
-      warn "MCP drift: $($driftLines.Count) render.py entries (partly expected on Windows; detail: python `$Layer\mcp\render.py)"
+      warn "MCP drift: $($driftLines.Count) render.py entries (partly expected on Windows; detail: python $RenderPy)"
     }
   } else {
     ok "MCP configs 100% aligned with the canonical manifest"
@@ -363,7 +380,6 @@ if ($Strict) {
   # the parity rationale). An empty result (e.g. Local-Only) is legitimate
   # and different from "couldn't derive it" -- both skip the checks below
   # explicitly (never silently pass on an empty expected set, never fail).
-  $RenderPy = Join-Path $Layer "mcp\render.py"
   $expectedAg = @()
   $expectedOc = @()
   # python3 first, then bare python (mirrors install.ps1's Get-PyBin order):
@@ -478,19 +494,29 @@ $core = if (Test-Path -LiteralPath $skActive) {
       Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "SKILL.md") -PathType Leaf }
   ).Count
 } else { 0 }
-ok "$core core skills exposed to eager runtimes"
+ok "$core skill folder(s) present in the shared discovery root; manifest reconciliation follows"
 # Manifest -> library coverage: without this assert, a skill registered in the
 # manifest can go missing on a host for weeks (the humanizer bug).
-$skillsSyncScript = Join-Path $Vault "03-INFRA\scripts\skills-sync.py"
+$skillsSyncScript = Join-Path $PSScriptRoot "skills-sync.py"
 if ((Get-Command "python" -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $skillsSyncScript)) {
   $ssOut = & python $skillsSyncScript 2>$null
   $ssExit = $LASTEXITCODE
   $esc = [char]27
   $clean = @($ssOut | ForEach-Object { "$_" -replace "$esc\[[0-9;]*m", "" })
   $pending = @($clean | Where-Object { $_ -match '^\s*\+ ' }).Count
+  $manualFolders = @($clean | Where-Object { $_ -match 'manual but exists as a real folder' }).Count
   if ($ssExit -ne 0) { warn "skills-sync diff returned FAIL, check by hand" }
   elseif ($pending -gt 0) { warn "skill drift: $pending pending actions from the manifest (skills-sync --apply)" }
+  elseif ($manualFolders -gt 0) { warn "$manualFolders manual skill folder(s) remain in discovery roots; preview the explicit quarantine with: skills-sync.py --migrate-legacy" }
   else { ok "skills aligned with the manifest (clean diff)" }
+
+  $legacyOut = & python $skillsSyncScript --migrate-legacy 2>$null
+  $legacyExit = $LASTEXITCODE
+  $legacyClean = @($legacyOut | ForEach-Object { "$_" -replace "$esc\[[0-9;]*m", "" })
+  $legacyPending = @($legacyClean | Where-Object { $_ -match '^\s*\+ legacy/' }).Count
+  if ($legacyExit -ne 0) { warn "legacy skill migration preview returned FAIL, check by hand" }
+  elseif ($legacyPending -gt 0) { warn "$legacyPending legacy eager skill view(s) await explicit quarantine: skills-sync.py --apply --migrate-legacy" }
+  else { ok "no legacy eager skill views awaiting quarantine" }
 } else { warn "python or skills-sync.py not available, skipping skill coverage" }
 
 # Third-party CLI compatibility: a short, pruneable list of known-broken

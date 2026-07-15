@@ -47,7 +47,12 @@ DOC_FILES = sorted(
 # never produces "install" as a candidate in the first place -- an entry
 # for it here was dead weight, unreachable by the check below (2026-07-13
 # adversarial review).
-NOT_LINKED_ALLOWLIST: dict[str, str] = {}
+NOT_LINKED_ALLOWLIST: dict[str, str] = {
+    "engine-push": (
+        "Maintainer-only publication gate. Normal end users never publish the "
+        "public engine; maintainers invoke it through an explicit platform path."
+    ),
+}
 
 # LINKED_COMMANDS entries that are POSIX-only (windows: False) and
 # referenced in docs without a caveat inline every single time. Accepted via

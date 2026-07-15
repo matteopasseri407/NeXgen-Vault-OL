@@ -47,7 +47,9 @@ The user runs one agent system across multiple CLIs and machines that must act a
 ## The three planes
 
 1. **Behaviour** — `AGENTS.md` is the single bootstrap. Every CLI's pointer file references it. One file, every agent, drift impossible.
-2. **Config** — `mcp/manifest.yaml` describes every MCP server once; `render.py` translates it into each CLI's dialect. Every local MCP package launched through `npx` has an exact version pin, so an upgrade is a tested engine change rather than an implicit upstream update. `skills/skills.manifest.yaml` does the same for skills. GitHub skills declare a full commit SHA, and `skills-sync.py` fetches and checks that exact object before materializing it in `~/.agents/skill-library`. Only explicit `exposure: core` skills enter the discovery-safe `~/.agents/skills`; all other bodies are selected with `agent-skill find|show`.
+2. **Config** — `mcp/manifest.yaml` describes every MCP server once; `render.py` translates it into each CLI's dialect. Every local MCP package launched through `npx` has an exact version pin, so an upgrade is a tested engine change rather than an implicit upstream update. On Windows, generated stdio commands resolve to absolute launchers with a bounded Node-safe `PATH`, and Codex aliases are validated after hyphen-to-underscore normalization before any live file is touched. `skills/skills.manifest.yaml` does the same for skills. GitHub skills declare a full commit SHA, and `skills-sync.py` fetches and checks that exact object before materializing it in `~/.agents/skill-library`. Only explicit `exposure: core` skills enter the discovery-safe `~/.agents/skills`; all other bodies are selected with `agent-skill find|show`. Codex progressive-discloses the bodies it does discover, but the stricter manual policy keeps the initial metadata catalog consistent across CLIs.
+
+The default MCP set stays small: the Vault Library carries versioned memory and semantic retrieval, while Firecrawl and Vault OCR mount when their self-hosted tunnels are configured. Playwright stays available on every CLI. Calendar access remains an on-demand command unless the user deliberately mounts its MCP server for one task. NeXgen does not add convenience MCP servers outside the canonical manifest by inference.
 3. **Memory** — the KnowledgeVault (markdown notes, Git-backed). Written through one door per type: notes via the `vault-library` MCP, infra files via `vault-push`.
 
 ## Sync transaction boundary
@@ -59,6 +61,13 @@ diverged, missing-remote, and failed-fetch states block apply. A network-only ma
 override exists as `agent-sync apply --allow-offline`; the recurring guard can
 never use it. Each phase returns an explicit result and any required failure
 propagates to the process exit code.
+
+Windows host mutations are a separate transaction boundary. Tests and
+sandboxed integrations set `NEXGEN_DISABLE_HOST_MUTATIONS=1`, which makes
+registry and Task Scheduler adapters no-op before any external call. Real
+scheduled-task wrappers are generated under per-user runtime state and carry
+the resolved engine/data topology into the hidden process; machine-specific
+paths never belong in the public checkout.
 
 The authoritative remote and publication mirrors are declared once in the
 private data vault at `03-INFRA/agent-universal-layer/sync/remotes.yaml`. Doctor and

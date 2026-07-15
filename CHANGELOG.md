@@ -8,6 +8,25 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## [0.5.4] - 2026-07-16
+
+Windows host-safety hotfix. This release remains Alpha: the independent,
+unassisted Windows cold-install gate required for Beta is still open.
+
+### Fixed (Windows)
+
+- Test and sandbox runs now cross an explicit no-host-mutations boundary before touching `HKCU\\Environment\\Path` or Task Scheduler. A real-registry invariant test prevents the pytest-path contamination that could push `PATH` past `cmd.exe`'s 8,191-character inherited-variable limit and break every npm-backed MCP at once.
+- `agent-sync` refuses to grow a projected process `PATH` beyond that limit. `agent-doctor.ps1` checks user, combined registry, and current-process lengths and resolves engine-owned renderer and skill helpers from the engine checkout after an engine/data split.
+- Generated scheduled-task wrappers live in per-user runtime state instead of the public checkout and preserve engine, vault-data, branch, and KnowledgeVault paths when the hidden guard starts.
+- MCP rendering resolves Windows launchers to absolute commands, supplies a bounded Node-safe `PATH`, accepts `KNOWLEDGE_VAULT_PATH` as the data-root fallback, and rejects Codex aliases that collide after hyphen-to-underscore normalization.
+- Playwright uses a Windows-only, fail-closed launcher that invokes npm through `node.exe` and `npm-cli.js`, avoiding Node 24's `spawnSync("npm.cmd")` failure while keeping Linux and macOS on the unchanged pinned `npx` path.
+- Playwright remains mounted on every CLI. The generic Filesystem server stays scoped to the two product roots and scratch Memory remains explicitly opt-in; Google Calendar remains on demand.
+- The Windows doctor now reports legacy skill folders awaiting explicit quarantine. The migration removes NTFS Junction views safely, Codex uses one official discovery root, and its documentation reflects native progressive disclosure correctly.
+- Added the PowerShell `engine-push` maintainer gate, with signed-identity checks and full introduced-history scanning against public patterns plus the private denylist.
+
+Release gate: full Windows pytest suite, public leak scan, real MCP
+`initialize` probes, GitHub Actions, signed commit and signed tag.
+
 ## [0.5.3] - 2026-07-15
 
 Secondo pass di compatibilità Windows, con copertura dei percorsi nativi, dei wrapper CLI e delle scritture concorrenti su NTFS.

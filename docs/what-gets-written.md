@@ -38,8 +38,9 @@ On Windows, every `agent-sync apply`/`guard` run (`install_scheduler` in
 `agent_sync.py`) self-heals the same recurring trigger that systemd provides
 on Linux, using only your own user account (no admin elevation, no service):
 
-- A hidden VBS wrapper, `start-agent-sync-hidden.vbs`, is written next to the
-  engine's PowerShell scripts (`<engine root>/scripts/`). It shells out to
+- A hidden VBS wrapper, `start-agent-sync-hidden.vbs`, is written under the
+  user's runtime state (`~/.local/state/`). It preserves the resolved engine,
+  vault-data, vault, and branch values, then shells out to
   `agent-sync.ps1 guard` via `powershell.exe -NoProfile -ExecutionPolicy
   Bypass`, run with a hidden window so no console flashes on each cycle.
 - Two Task Scheduler entries named `KnowledgeVault Agent Sync` and

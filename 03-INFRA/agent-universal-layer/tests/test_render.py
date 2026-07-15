@@ -184,12 +184,13 @@ def test_write_guard_blocks_on_missing_section(sandbox_with_live_configs, cli):
     assert path.read_text(encoding="utf-8") == before_raw, f"{cli}: il file e' stato toccato nonostante il guard"
 
 
-def test_write_codex_guard_blocks_on_missing_env_section(sandbox_with_live_configs):
+def test_write_codex_adds_a_newly_required_env_section(sandbox_with_live_configs):
     sb = sandbox_with_live_configs
     path = sb.live_config_path("codex")
-    # manomissione dialetto-specifica: una sezione mcp_servers.* esiste ma le
-    # manca la sotto-sezione .env, mentre il manifest richiede env per quel
-    # server (fake-cross-os-tool ha env). Guard atteso: "manca [.env]".
+    # Upgrade dialetto-specifico: una sezione mcp_servers.* esiste ma le manca
+    # la sotto-sezione .env, mentre il manifest ora la richiede. Il renderer
+    # deve aggiungerla chirurgicamente, non costringere l'utente a cancellare
+    # prima la sezione live.
     before_raw = path.read_text(encoding="utf-8") + (
         "\n[mcp_servers.fake_cross_os_tool]\n"
         'command = "python3"\n'
@@ -199,8 +200,11 @@ def test_write_codex_guard_blocks_on_missing_env_section(sandbox_with_live_confi
 
     mod = load_render_module(sb)
     rc = mod.write_codex()
-    assert rc == 2, f"guard codex .env non attivato (rc={rc})"
-    assert path.read_text(encoding="utf-8") == before_raw, "codex: il file e' stato toccato nonostante il guard"
+    assert rc == 0
+    rendered = mod.toml_loads(path.read_text(encoding="utf-8"))
+    assert rendered["mcp_servers"]["fake_cross_os_tool"]["env"] == {
+        "FAKE_TOOL_URL": "http://127.0.0.1:19002"
+    }
 
 
 @pytest.mark.parametrize(
@@ -557,8 +561,9 @@ def test_prune_backups_keeps_at_most_three(tmp_path):
 
 # ---- test 7: os_view applica l'override windows: solo su IS_WINDOWS=True ---
 
-def test_os_view_windows_override(sandbox):
+def test_os_view_windows_override(sandbox, monkeypatch):
     mod = load_render_module(sandbox)
+    monkeypatch.setattr(mod.shutil, "which", lambda _command: None)
     servers = _manifest_servers(sandbox)
     server = servers["fake-cross-os-tool"]
 
@@ -581,9 +586,10 @@ def test_os_view_windows_override(sandbox):
     assert plain_view["command"] == "fake-cmd"
 
 
-def test_os_view_windows_normalizes_common_mcp_wrappers(sandbox):
+def test_os_view_windows_normalizes_common_mcp_wrappers(sandbox, monkeypatch):
     mod = load_render_module(sandbox)
     mod.IS_WINDOWS = True
+    monkeypatch.setattr(mod.shutil, "which", lambda _command: None)
     base = {"transport": "stdio", "args": ["server.js"], "targets": ["codex"]}
 
     assert mod.os_view({**base, "command": "npx"})["command"] == "npx.cmd"
@@ -595,6 +601,98 @@ def test_os_view_windows_normalizes_common_mcp_wrappers(sandbox):
     # normalization as a portable manifest entry.
     overridden = {**base, "command": "python3", "windows": {"command": "npx"}}
     assert mod.os_view(overridden)["command"] == "npx.cmd"
+
+
+def test_os_view_windows_resolves_npx_absolutely_and_bounds_child_path(sandbox, monkeypatch, tmp_path):
+    mod = load_render_module(sandbox)
+    mod.IS_WINDOWS = True
+    npx_dir = tmp_path / "npm-shims"
+    node_dir = tmp_path / "nodejs"
+    npx_dir.mkdir()
+    node_dir.mkdir()
+    npx = npx_dir / "npx.cmd"
+    node = node_dir / "node.exe"
+    npx.write_text("@echo off\r\n", encoding="utf-8")
+    node.write_bytes(b"")
+    monkeypatch.setattr(
+        mod.shutil,
+        "which",
+        lambda command: str(npx) if command == "npx.cmd" else (str(node) if command == "node.exe" else None),
+    )
+    monkeypatch.setenv("PATH", ("X" * 5000) + mod.os.pathsep + ("Y" * 5000))
+
+    rendered = mod.os_view({"transport": "stdio", "command": "npx", "args": ["pkg"], "targets": ["codex"]})
+
+    assert rendered["command"] == str(npx)
+    assert str(npx_dir) in rendered["env"]["PATH"]
+    assert str(node_dir) in rendered["env"]["PATH"]
+    assert len(rendered["env"]["PATH"]) <= mod.WINDOWS_CMD_ENV_LIMIT
+
+
+def test_os_view_expands_only_portable_local_path_placeholders(sandbox, monkeypatch):
+    engine = sandbox.home / "engine-root"
+    data = sandbox.home / "vault-data"
+    monkeypatch.setenv("AGENT_ENGINE_ROOT", str(engine))
+    monkeypatch.setenv("AGENT_VAULT_DATA", str(data))
+    mod = load_render_module(sandbox)
+    mod.IS_WINDOWS = True
+    monkeypatch.setattr(mod.shutil, "which", lambda command: command)
+
+    rendered = mod.os_view(
+        {
+            "transport": "stdio",
+            "command": "node",
+            "args": [
+                r"${AGENT_ENGINE_ROOT}\agent-universal-layer\mcp\server.mjs",
+                "${AGENT_VAULT_DATA}",
+                "${SECRET_TOKEN}",
+            ],
+            "targets": ["codex"],
+        }
+    )
+
+    assert rendered["args"][0].startswith(str(engine))
+    assert rendered["args"][1] == str(data)
+    assert rendered["args"][2] == "${SECRET_TOKEN}"
+
+
+def test_render_honors_knowledge_vault_path_when_agent_vault_data_is_unset(sandbox, monkeypatch):
+    custom_vault = sandbox.home / "custom-vault"
+    monkeypatch.delenv("AGENT_VAULT_DATA", raising=False)
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(custom_vault))
+
+    mod = load_render_module(sandbox)
+
+    assert mod.VAULT_DATA == custom_vault
+
+
+def test_manifest_rejects_codex_alias_collisions(sandbox):
+    (sandbox.mcp_dir / "manifest.yaml").write_text(
+        """schema_version: 1
+servers:
+  desktop-commander:
+    transport: stdio
+    command: fake
+    targets: [codex]
+  desktop_commander:
+    transport: stdio
+    command: fake
+    targets: [codex]
+""",
+        encoding="utf-8",
+    )
+    mod = load_render_module(sandbox)
+
+    with pytest.raises(mod.ConfigValidationError, match="collide as Codex key"):
+        mod.load_manifest()
+
+
+def test_codex_live_alias_collisions_are_reported_without_auto_deletion(sandbox):
+    mod = load_render_module(sandbox)
+
+    assert mod._codex_alias_collisions(["desktop-commander", "desktop_commander", "other"]) == [
+        ["desktop-commander", "desktop_commander"]
+    ]
 
 
 def test_matching_live_server_fields_are_preserved_additively(sandbox):

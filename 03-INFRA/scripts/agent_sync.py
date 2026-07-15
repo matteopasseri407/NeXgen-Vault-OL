@@ -58,6 +58,22 @@ from config_schema import (
 )  # noqa: E402
 
 IS_WINDOWS = platform.system() == "Windows"
+HOST_MUTATIONS_DISABLED_ENV = "NEXGEN_DISABLE_HOST_MUTATIONS"
+WINDOWS_CMD_ENV_LIMIT = 8191
+
+
+def _host_mutations_disabled(env: "Env", operation: str) -> bool:
+    """Keep tests and dry-run harnesses away from machine-wide Windows state.
+
+    HOME/USERPROFILE overrides redirect normal file writes, but they do not
+    virtualize HKCU or Task Scheduler. Every sandboxed integration process
+    must therefore cross this explicit boundary before touching either one.
+    """
+    value = os.environ.get(HOST_MUTATIONS_DISABLED_ENV, "").strip().lower()
+    if value not in {"1", "true", "yes", "on"}:
+        return False
+    env.log(f"host-mutations: {operation} skipped ({HOST_MUTATIONS_DISABLED_ENV}=1)")
+    return True
 
 
 def _opencode_config_path(home: Path) -> Path:
@@ -1086,6 +1102,8 @@ def _ensure_user_path_entry(env: Env) -> None:
     started and cannot be fixed retroactively, same as a manual `setx`."""
     if not IS_WINDOWS:
         return
+    if _host_mutations_disabled(env, "user PATH registry update"):
+        return
     try:
         import winreg
     except ImportError as exc:
@@ -1111,6 +1129,17 @@ def _ensure_user_path_entry(env: Env) -> None:
                 return
             entries.append(target)
             new_value = ";".join(entries)
+            current_process_path = os.environ.get("PATH", "")
+            projected_process_length = len(current_process_path) + max(0, len(new_value) - len(current))
+            if max(len(new_value), projected_process_length) > WINDOWS_CMD_ENV_LIMIT:
+                env.log(
+                    "path: WARNING -- refusing to append the launcher directory: "
+                    f"the resulting User PATH would be {len(new_value)} characters and the "
+                    f"projected process PATH {projected_process_length}, "
+                    f"over cmd.exe's {WINDOWS_CMD_ENV_LIMIT}-character inherited-variable limit. "
+                    f"Shorten PATH or invoke {target} by absolute path."
+                )
+                return
             winreg.SetValueEx(key, "Path", 0, kind, new_value)
     except OSError as exc:
         # Loud in the log, not a failed phase (see utils()'s call site): the
@@ -1301,6 +1330,11 @@ def _install_systemd_units(env: Env) -> bool:
 
 _VBS_TEMPLATE = (
     'Set shell = CreateObject("WScript.Shell")\r\n'
+    'Set processEnv = shell.Environment("PROCESS")\r\n'
+    'processEnv("AGENT_ENGINE_ROOT") = "{engine_root}"\r\n'
+    'processEnv("AGENT_VAULT_DATA") = "{vault_data}"\r\n'
+    'processEnv("KNOWLEDGE_VAULT_PATH") = "{vault}"\r\n'
+    'processEnv("KNOWLEDGE_VAULT_BRANCH") = "{branch}"\r\n'
     'script = "{script}"\r\n'
     'shell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -File " & Chr(34) & script & Chr(34) '
     '& " guard", 0, True\r\n'
@@ -1308,10 +1342,23 @@ _VBS_TEMPLATE = (
 
 
 def _install_scheduled_task(env: Env) -> bool:
+    if _host_mutations_disabled(env, "Task Scheduler update"):
+        return True
     task_name = "KnowledgeVault Agent Sync"
     script_path = env.engine_scripts / "agent-sync.ps1"
-    wrapper_path = env.engine_scripts / "start-agent-sync-hidden.vbs"
-    content = _VBS_TEMPLATE.format(script=str(script_path).replace('"', '""'))
+    # Generated, machine-specific state must never dirty the public engine
+    # checkout or risk being staged into a release.
+    wrapper_path = env.log_dir / "start-agent-sync-hidden.vbs"
+    def vbs_string(value: Path | str) -> str:
+        return str(value).replace('"', '""')
+
+    content = _VBS_TEMPLATE.format(
+        script=vbs_string(script_path),
+        engine_root=vbs_string(env.engine_root),
+        vault_data=vbs_string(env.vault_data),
+        vault=vbs_string(env.vault),
+        branch=vbs_string(env.branch),
+    )
     if _write_if_different(wrapper_path, content):
         env.log("scheduled-task: hidden wrapper updated")
     run_cmd = f'wscript.exe "{wrapper_path}"'

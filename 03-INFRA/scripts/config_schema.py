@@ -277,6 +277,22 @@ def validate_mcp_manifest(data: Any, source: str | Path) -> dict[str, dict[str, 
         if not isinstance(name, str) or not ENTRY_NAME_RE.fullmatch(name):
             _error(source, "every MCP server name must use letters, digits, '.', '_' or '-'")
         _validate_mcp_server(server, source, f"MCP server '{name}'", allow_windows=True)
+    # Codex maps hyphens to underscores in TOML table names. Two otherwise
+    # valid manifest names can therefore collapse to one live key and launch
+    # duplicate or ambiguous clients. Reject the collision before any writer
+    # touches a runtime config.
+    codex_keys: dict[str, str] = {}
+    for name, server in servers.items():
+        if "codex" not in server.get("targets", []):
+            continue
+        key = name.replace("-", "_").casefold()
+        previous = codex_keys.get(key)
+        if previous is not None and previous != name:
+            _error(
+                source,
+                f"MCP servers '{previous}' and '{name}' collide as Codex key '{key}'",
+            )
+        codex_keys[key] = name
     return servers
 
 

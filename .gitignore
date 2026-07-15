@@ -39,6 +39,11 @@ id_ed25519
 
 # Session artifacts from agent CLIs, if ever run inside this repo
 .claude/
+.agents/
+
+# Generated Windows runtime wrapper. It contains machine-specific absolute
+# paths and belongs in per-user state, never in the public source checkout.
+03-INFRA/scripts/start-agent-sync-hidden.vbs
 
 # Python noise (scripts generate this on run)
 __pycache__/

@@ -13,7 +13,7 @@ when the task actually matches it.
 | `~/.agents/skill-library/` | Complete managed bodies. Never an eager discovery root. |
 | `~/.agents/skills/INDEX.md` | Tiny generated catalog. No optional `SKILL.md` bodies live beside it. |
 | `~/.claude/skills/` | Declared native-lazy Claude views, when Claude is a target. |
-| `~/.codex/skills/` | Only explicit `exposure: core` views. |
+| `~/.codex/skills/` | Legacy root. NeXgen does not mirror skills here, because Codex already discovers the shared root. |
 
 Every manifest entry has an `origin`, optional native `targets`, and an
 `exposure`:
@@ -38,8 +38,12 @@ environment variable matches the skill's `owner`; everywhere else it is
 skipped, with a clear line saying so. `scope: team` (or no `scope` at
 all) still propagates to every machine, same as today.
 
-Claude can keep declared manual views because it loads them lazily. Codex,
-OpenCode, Antigravity, and local workers use the same explicit command:
+Claude can keep all declared manual views because it loads them lazily. Codex
+also progressive-discloses discovered skill bodies, but NeXgen intentionally
+keeps manual entries outside its discovery roots to minimize the initial
+metadata catalog and preserve one routing contract across every CLI. Codex,
+OpenCode, Antigravity, and local workers therefore use the same explicit
+command for manual skills:
 
 ```bash
 agent-skill list

@@ -4,7 +4,7 @@
 [![Latest version](https://img.shields.io/github/v/release/matteopasseri407/NeXgen-Engine?display_name=tag&label=latest%20version)](https://github.com/matteopasseri407/NeXgen-Engine/releases/latest)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
 
-NeXgen Engine is a Git-based framework for managing shared instructions, tool configuration, and version-controlled working memory across AI tools such as Claude Code. It supports software projects as well as notes, research, and professional documents. The project is currently in Alpha, with `v0.5.3` as the latest release.
+NeXgen Engine is a Git-based framework for managing shared instructions, tool configuration, and version-controlled working memory across AI tools such as Claude Code. It supports software projects as well as notes, research, and professional documents. The project is currently in Alpha, with `v0.5.4` as the latest release.
 
 Instructions, generated tool configuration, configuration checks, secrets guidance, and shared memory are stored as plain files in a Git repository rather than in a hosted service.
 
@@ -79,7 +79,7 @@ The tools reach them through the Model Context Protocol (MCP).
 - **Semantic search, configured separately.** The `vault-library` MCP contract exposes `semantic_search`, and the repository includes the manifest and retrieval rules for using it. The search backend and its deployment code are not included in this repository, but [`03-INFRA/deploy/semantic-search-recipe.md`](03-INFRA/deploy/semantic-search-recipe.md) is a complete build specification — embedding model, hybrid ranking algorithm, weights, reranker, resource footprint — precise enough for an AI coding agent to build a compatible backend from scratch. Without a compatible backend, tools fall back to lexical search.
 - **Web scraping.** You can deploy a Firecrawl instance using the files in `03-INFRA/deploy/firecrawl/`. It is the default read-only path for web content.
 - **Local OCR.** You can deploy an OCR service using the files in `03-INFRA/deploy/ocr/` to extract text from screenshots, logs, and scanned documents locally.
-- **Visible browser.** For forms, logins, and other interactive tasks, tools attach to a real Chrome window through the DevTools protocol. They must not use a headless browser for interactive tasks.
+- **Visible browser.** For forms, logins, and other interactive tasks, tools attach to a real Chrome window through the DevTools protocol. They must not use a headless browser for interactive work.
 
 ## Design boundaries
 
@@ -160,10 +160,10 @@ This project is free to use. Some optional links (like the OpenCode one above) a
 
 ---
 
-# NeXgen Engine, versione italiana, Alpha, v0.5.3
+# NeXgen Engine, versione italiana, Alpha, v0.5.4
 
 NeXgen Engine è un framework basato su Git per gestire istruzioni condivise, configurazione dei tool e memoria di lavoro versionata tra più strumenti AI, come Claude Code.
-Il progetto è ancora in fase Alpha, con `v0.5.3` come release più recente.
+Il progetto è ancora in fase Alpha, con `v0.5.4` come release più recente.
 Può essere usato per progetti software, note, ricerca e documenti professionali.
 
 Le istruzioni, la configurazione generata dei tool, i controlli sulle differenze, le regole per i segreti e la memoria condivisa sono file di testo dentro un repository Git, non dati conservati in un servizio ospitato.
@@ -266,7 +266,7 @@ Gli agenti li raggiungono tramite il Model Context Protocol, MCP.
 - **Web scraping.** Puoi installare un'istanza di Firecrawl usando i file di deploy in `03-INFRA/deploy/firecrawl/`.
   È la corsia predefinita per le letture web in sola lettura.
 - **OCR locale.** Puoi installare un servizio OCR usando i file in `03-INFRA/deploy/ocr/`, per estrarre testo da screenshot, log e documenti scansionati senza inviarli a un servizio esterno.
-- **Browser visibile.** Per form, login e controlli interattivi, gli strumenti si collegano a una finestra Chrome reale tramite il protocollo DevTools.
+- **Browser visibile.** Per form, login e controlli interattivi, gli strumenti si collegano alla finestra Chrome reale tramite il protocollo DevTools.
   Non devono usare un browser headless per le attività interattive.
 
 ## Confini del progetto

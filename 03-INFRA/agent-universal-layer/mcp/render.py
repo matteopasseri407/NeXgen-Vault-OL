@@ -22,7 +22,7 @@ dialect.
     --strict block) to derive their own expected-server set instead of
     hardcoding it. Exit 0, or 2 on a manifest error."""
 from __future__ import annotations
-import argparse, difflib, json, os, platform, re, sys, time
+import argparse, difflib, json, os, platform, re, shutil, sys, time
 from pathlib import Path
 try:
     import tomllib
@@ -48,9 +48,20 @@ from config_schema import ConfigValidationError, load_mcp_manifest  # noqa: E402
 # something the engine repo should serve — read it from vault_data, not from
 # HERE (this script may be running from a cloned engine, where the sibling
 # manifest.yaml is only the generic product template).
-VAULT_DATA = Path(os.environ.get("AGENT_VAULT_DATA") or str(HOME / "KnowledgeVault"))
+VAULT_DATA = Path(
+    os.environ.get("AGENT_VAULT_DATA")
+    or os.environ.get("KNOWLEDGE_VAULT_PATH")
+    or str(HOME / "KnowledgeVault")
+)
 MANIFEST = VAULT_DATA / "03-INFRA" / "agent-universal-layer" / "mcp" / "manifest.yaml"
 IS_WINDOWS = platform.system() == "Windows"
+WINDOWS_CMD_ENV_LIMIT = 8191
+ENGINE_ROOT = Path(os.environ.get("AGENT_ENGINE_ROOT") or HERE.parent.parent)
+LOCAL_PATH_PLACEHOLDERS = {
+    "${AGENT_ENGINE_ROOT}": str(ENGINE_ROOT),
+    "${AGENT_VAULT_DATA}": str(VAULT_DATA),
+    "${KNOWLEDGE_VAULT_PATH}": str(Path(os.environ.get("KNOWLEDGE_VAULT_PATH") or VAULT_DATA)),
+}
 
 
 def _opencode_config_path() -> Path:
@@ -70,6 +81,81 @@ MCP_REMOTE_PACKAGE = "mcp-remote@0.1.38"
 
 SECRET_KEY = re.compile(r"(token|secret|password|authorization|bearer|api[_-]?key|cookie)", re.I)
 LONGTOK = re.compile(r"^[A-Za-z0-9_\-\.=+/]{40,}$")
+
+
+def _resolve_windows_command(command):
+    normalized = {
+        "npx": "npx.cmd",
+        "node": "node.exe",
+        "python3": "python",
+    }.get(command, command)
+    return shutil.which(normalized) or normalized
+
+
+def _windows_node_path(command_path):
+    """Return an MCP-safe PATH with the Node shim directory first.
+
+    Windows batch shims installed by npm invoke ``node`` by name.  Resolving
+    npx.cmd itself to an absolute path is therefore insufficient when Node's
+    directory is absent from PATH.  If the inherited PATH is already beyond
+    cmd.exe's 8191-character limit, use a small system-only fallback so the
+    MCP can still initialize instead of inheriting a known-broken value.
+    """
+    launcher_dir = str(Path(command_path).parent)
+    node_path = shutil.which("node.exe") or shutil.which("node")
+    node_dir = str(Path(node_path).parent) if node_path else launcher_dir
+    existing = os.environ.get("PATH", "")
+    entries = [launcher_dir, node_dir, *(entry for entry in existing.split(os.pathsep) if entry.strip())]
+    deduped = []
+    seen = set()
+    for entry in entries:
+        key = entry.strip().rstrip("\\/").casefold()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(entry.strip())
+    candidate = os.pathsep.join(deduped)
+    if len(candidate) <= WINDOWS_CMD_ENV_LIMIT:
+        return candidate
+    system_root = os.environ.get("SystemRoot") or r"C:\Windows"
+    fallback = [
+        launcher_dir,
+        node_dir,
+        str(Path(system_root) / "System32"),
+        system_root,
+        str(Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0"),
+        str(Path(system_root) / "System32" / "OpenSSH"),
+    ]
+    fallback_deduped = []
+    fallback_seen = set()
+    for entry in fallback:
+        key = entry.rstrip("\\/").casefold()
+        if key in fallback_seen:
+            continue
+        fallback_seen.add(key)
+        fallback_deduped.append(entry)
+    return os.pathsep.join(fallback_deduped)
+
+
+def _expand_local_path_placeholders(server):
+    """Expand only approved local path variables, never token placeholders."""
+    expanded = dict(server)
+    for field in ("command", "args"):
+        value = expanded.get(field)
+        values = value if isinstance(value, list) else [value]
+        materialized = []
+        for item in values:
+            if not isinstance(item, str):
+                materialized.append(item)
+                continue
+            for placeholder, replacement in LOCAL_PATH_PLACEHOLDERS.items():
+                item = item.replace(placeholder, replacement)
+            materialized.append(item)
+        if isinstance(value, list):
+            expanded[field] = materialized
+        elif value is not None:
+            expanded[field] = materialized[0]
+    return expanded
 
 def toml_loads(text):
     if tomllib is None:
@@ -117,8 +203,10 @@ def r_antigravity(name, s):
     if s["transport"] == "stdio":
         return {"command": s["command"], "args": s.get("args", []), "env": s.get("env", {})}
     hdr = f"Authorization: Bearer ${{{s['auth']['env']}}}"
-    return {"command": "npx.cmd" if IS_WINDOWS else "npx",
-            "args": ["-y", MCP_REMOTE_PACKAGE, s["url"], "--header", hdr], "env": {}}
+    command = _resolve_windows_command("npx") if IS_WINDOWS else "npx"
+    env = {"PATH": _windows_node_path(command)} if IS_WINDOWS else {}
+    return {"command": command,
+            "args": ["-y", MCP_REMOTE_PACKAGE, s["url"], "--header", hdr], "env": env}
 
 def r_opencode(name, s):
     if s["transport"] == "stdio":
@@ -151,15 +239,17 @@ def os_view(s):
     if IS_WINDOWS:
         merged = {**s, **(s.get("windows") or {})}
         merged.pop("windows", None)
+        merged = _expand_local_path_placeholders(merged)
         if merged.get("transport") == "stdio":
             command = merged.get("command")
-            merged["command"] = {
-                "npx": "npx.cmd",
-                "node": "node.exe",
-                "python3": "python",
-            }.get(command, command)
+            merged["command"] = _resolve_windows_command(command)
+            if command in {"npx", "npx.cmd"}:
+                merged["env"] = {
+                    **(merged.get("env") or {}),
+                    "PATH": _windows_node_path(merged["command"]),
+                }
         return merged
-    return {k: v for k, v in s.items() if k != "windows"}
+    return _expand_local_path_placeholders({k: v for k, v in s.items() if k != "windows"})
 
 def _env_present(var):
     """True if the env var is defined and non-empty."""
@@ -279,6 +369,13 @@ def diff_struct(path, cur, exp, out):
     elif cur != exp:
         out.append(f"    ~ {path[:-1]}: live={json.dumps(cur, ensure_ascii=False)}  expected={json.dumps(exp, ensure_ascii=False)}")
 
+
+def _codex_alias_collisions(names):
+    grouped = {}
+    for name in names:
+        grouped.setdefault(name.replace("-", "_").casefold(), []).append(name)
+    return [sorted(group) for group in grouped.values() if len(group) > 1]
+
 def cmd_diff():
     man = _load_manifest_or_stop()
     if man is None:
@@ -310,6 +407,14 @@ def cmd_diff():
             continue
         if current is None:
             print("  (config not present: CLI not installed here, or installed but never launched yet, skipped)"); continue
+        if cli == "codex":
+            for aliases in _codex_alias_collisions(current):
+                print(
+                    "  [ALIAS COLLISION] Codex treats these names as the same key: "
+                    + ", ".join(aliases)
+                    + ". Kept unchanged; reconcile explicitly after backup."
+                )
+                bad += 1
         wanted = {n: s for n, s in man.items() if cli in s["targets"]}
         seen = set()
         for name, s in wanted.items():
@@ -644,13 +749,20 @@ def write_codex(path=None):
     for cname, (direct, env) in targets.items():
         if f"mcp_servers.{cname}" in headers:
             s, e = _content_range(lines, headers[f"mcp_servers.{cname}"])
-            edits.append((s, e, _codex_body(direct)))
+            direct_body = _codex_body(direct)
             if env is not None:
                 if f"mcp_servers.{cname}.env" in headers:
                     s2, e2 = _content_range(lines, headers[f"mcp_servers.{cname}.env"])
                     edits.append((s2, e2, _codex_body(env)))
                 else:
-                    print(f">>> STOP: [mcp_servers.{cname}] exists but [.env] is missing — rare case, not patching."); return 2
+                    # Safe upgrade path: an older rendered stdio entry may
+                    # predate a newly required environment block, for example
+                    # the bounded Windows PATH added to npm-backed servers.
+                    # Append the child table as part of the same surgical
+                    # replacement and let the parse/non-MCP guards below
+                    # validate the complete result before writing.
+                    direct_body += ["", f"[mcp_servers.{cname}.env]", *_codex_body(env)]
+            edits.append((s, e, direct_body))
         else:
             add_block += ["", f"[mcp_servers.{cname}]"] + _codex_body(direct)
             if env is not None:

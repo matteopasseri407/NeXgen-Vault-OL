@@ -98,6 +98,10 @@ class Sandbox:
         # Keep their pull state explicitly healthy and offline from real remotes.
         # Tests for remote failures override this value deliberately.
         e["KNOWLEDGE_VAULT_REMOTE"] = "local"
+        # HOME/USERPROFILE redirects files but not HKCU or Task Scheduler.
+        # Full guard/apply subprocess tests must never mutate the host that is
+        # running pytest, especially a maintainer's physical Windows machine.
+        e["NEXGEN_DISABLE_HOST_MUTATIONS"] = "1"
         e["PATH"] = f"{self.bin_stubs}{os.pathsep}{e.get('PATH', '')}"
         for key in (
             "TELEGRAM_BOT_TOKEN",
@@ -199,6 +203,7 @@ def sandbox(tmp_path, monkeypatch) -> Sandbox:
         monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
         monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
     monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sb.vault))
+    monkeypatch.setenv("NEXGEN_DISABLE_HOST_MUTATIONS", "1")
     return sb
 
 

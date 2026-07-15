@@ -24,7 +24,7 @@ schema_version: 1
 
 servers:
 
-  # ---- backbone (present in every CLI, always) ------------------------
+  # ---- interactive browser (always available) ------------------------
 
   # npx resolves an exact package version.  Update a pin only after testing
   # it deliberately, then keep the previous engine pin available for rollback.
@@ -34,6 +34,9 @@ servers:
     command: npx
     args: ["-y", "@playwright/mcp@0.0.78", "--cdp-endpoint", "http://localhost:9222"]
     targets: [claude, codex, antigravity, opencode]
+    windows:
+      command: node
+      args: ["${AGENT_ENGINE_ROOT}\\agent-universal-layer\\mcp\\playwright-human-safe.mjs", "--cdp-endpoint", "http://localhost:9222"]
 
   # ---- self-hosted backend (Cloud-Server mode only) --------------------
   # Ports come from env vars set by the user; sane defaults aligned with

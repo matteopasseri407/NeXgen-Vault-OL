@@ -1361,7 +1361,37 @@ def _make_fake_winreg(initial_path: str = ""):
     return fake
 
 
+def _enable_host_mutations(monkeypatch):
+    """Registry unit tests opt in explicitly; the sandbox default is no-op."""
+    monkeypatch.delenv("NEXGEN_DISABLE_HOST_MUTATIONS", raising=False)
+    monkeypatch.setenv("PATH", r"C:\Windows;C:\Windows\System32")
+
+
+def test_windows_test_boundary_blocks_registry_and_scheduler(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("NEXGEN_DISABLE_HOST_MUTATIONS", "1")
+    fake_winreg = _make_fake_winreg(r"C:\Windows")
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+    monkeypatch.setattr(
+        mod,
+        "_run_external",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("host command must not run")),
+    )
+    env = mod.Env()
+
+    mod._ensure_user_path_entry(env)
+    assert mod._install_scheduled_task(env) is True
+
+    assert fake_winreg._state["Path"][0] == r"C:\Windows"
+    assert not (env.log_dir / "start-agent-sync-hidden.vbs").exists()
+    log = env.log_path.read_text(encoding="utf-8")
+    assert "user PATH registry update skipped" in log
+    assert "Task Scheduler update skipped" in log
+
+
 def test_windows_user_path_appends_when_missing(sandbox, monkeypatch):
+    _enable_host_mutations(monkeypatch)
     mod = load_agent_sync_module(sandbox)
     monkeypatch.setattr(mod, "IS_WINDOWS", True)
     monkeypatch.setenv("HOME", str(sandbox.home))
@@ -1382,6 +1412,7 @@ def test_windows_user_path_appends_when_missing(sandbox, monkeypatch):
 
 
 def test_windows_user_path_noop_when_already_present_case_insensitive(sandbox, monkeypatch):
+    _enable_host_mutations(monkeypatch)
     mod = load_agent_sync_module(sandbox)
     monkeypatch.setattr(mod, "IS_WINDOWS", True)
     monkeypatch.setenv("HOME", str(sandbox.home))
@@ -1403,6 +1434,7 @@ def test_windows_user_path_noop_when_already_present_case_insensitive(sandbox, m
 
 
 def test_windows_user_path_preserves_existing_entries(sandbox, monkeypatch):
+    _enable_host_mutations(monkeypatch)
     mod = load_agent_sync_module(sandbox)
     monkeypatch.setattr(mod, "IS_WINDOWS", True)
     monkeypatch.setenv("HOME", str(sandbox.home))
@@ -1431,6 +1463,7 @@ def test_windows_user_path_creates_value_when_entirely_absent(sandbox, monkeypat
     the OpenKey-itself-fails case below. QueryValueEx raising
     FileNotFoundError is _make_fake_winreg's own default (initial_path=""
     means no "Path" key seeded into its in-memory state at all)."""
+    _enable_host_mutations(monkeypatch)
     mod = load_agent_sync_module(sandbox)
     monkeypatch.setattr(mod, "IS_WINDOWS", True)
     monkeypatch.setenv("HOME", str(sandbox.home))
@@ -1453,6 +1486,7 @@ def test_windows_user_path_registry_failure_is_logged_not_raised(sandbox, monkey
     failed -- see utils()'s own call-site comment. A future doctor check
     surfaces a still-missing PATH entry; this phase's job (writing the
     wrappers) is already done by the time this runs."""
+    _enable_host_mutations(monkeypatch)
     mod = load_agent_sync_module(sandbox)
     monkeypatch.setattr(mod, "IS_WINDOWS", True)
     monkeypatch.setenv("HOME", str(sandbox.home))
@@ -1470,6 +1504,92 @@ def test_windows_user_path_registry_failure_is_logged_not_raised(sandbox, monkey
     mod._ensure_user_path_entry(env)  # must not raise
 
     assert "WARNING" in env.log_path.read_text(encoding="utf-8")
+
+
+def test_windows_user_path_refuses_to_cross_cmd_limit(sandbox, monkeypatch):
+    _enable_host_mutations(monkeypatch)
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    fake_winreg = _make_fake_winreg("X" * mod.WINDOWS_CMD_ENV_LIMIT)
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+    env = mod.Env()
+
+    mod._ensure_user_path_entry(env)
+
+    assert fake_winreg._state["Path"][0] == "X" * mod.WINDOWS_CMD_ENV_LIMIT
+    log = env.log_path.read_text(encoding="utf-8")
+    assert "refusing to append" in log
+    assert str(mod.WINDOWS_CMD_ENV_LIMIT) in log
+
+
+def test_windows_user_path_accounts_for_the_combined_process_path(sandbox, monkeypatch):
+    _enable_host_mutations(monkeypatch)
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("PATH", "X" * (mod.WINDOWS_CMD_ENV_LIMIT - 4))
+    fake_winreg = _make_fake_winreg(r"C:\tools")
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+    env = mod.Env()
+
+    mod._ensure_user_path_entry(env)
+
+    assert fake_winreg._state["Path"][0] == r"C:\tools"
+    log = env.log_path.read_text(encoding="utf-8")
+    assert "projected process PATH" in log
+    assert "refusing to append" in log
+
+
+def test_windows_scheduler_wrapper_lives_in_runtime_state_and_reenters_split_topology(sandbox, monkeypatch):
+    _enable_host_mutations(monkeypatch)
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(mod, "_run_external", fake_run)
+    env = mod.Env()
+
+    assert mod._install_scheduled_task(env) is True
+
+    wrapper = env.log_dir / "start-agent-sync-hidden.vbs"
+    assert wrapper.is_file()
+    assert not (env.engine_scripts / "start-agent-sync-hidden.vbs").exists()
+    content = wrapper.read_text(encoding="utf-8")
+    assert str(env.engine_root) in content
+    assert str(env.vault_data) in content
+    assert str(env.vault) in content
+    assert env.branch in content
+    assert calls and all(str(wrapper) in " ".join(call) for call in calls)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real HKCU invariant is Windows-only.")
+def test_windows_guard_sandbox_leaves_real_user_path_unchanged(sandbox):
+    import winreg
+
+    def task_state(name):
+        result = subprocess.run(
+            ["schtasks.exe", "/Query", "/TN", name, "/XML"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        return result.returncode, result.stdout
+
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+        before = winreg.QueryValueEx(key, "Path")
+    task_names = ("KnowledgeVault Agent Sync", "KnowledgeVault Agent Sync Logon")
+    tasks_before = {name: task_state(name) for name in task_names}
+    result = run_agent_sync_python(sandbox, "guard")
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+        after = winreg.QueryValueEx(key, "Path")
+    tasks_after = {name: task_state(name) for name in task_names}
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert after == before
+    assert tasks_after == tasks_before
 
 
 # ── vault-push subcommand wiring (2026-07-13) ──────────────────────────────
