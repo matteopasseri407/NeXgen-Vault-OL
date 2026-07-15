@@ -808,6 +808,23 @@ def test_windows_utils_installs_vault_groom_command_wrapper(sandbox, monkeypatch
     assert "vault-groom.ps1" in wrapper.read_text(encoding="utf-8")
 
 
+def test_windows_utils_installs_firecrawl_command_wrapper(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("USERPROFILE", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+
+    env = mod.Env()
+    mod.utils(env)
+
+    launcher = sandbox.home / ".local" / "bin" / "firecrawl-local.ps1"
+    wrapper = sandbox.home / ".local" / "bin" / "firecrawl-local.cmd"
+    assert launcher.exists()
+    assert launcher.resolve() == (sandbox.scripts_dir / "firecrawl-local.ps1").resolve()
+    assert "firecrawl-local.ps1" in wrapper.read_text(encoding="utf-8")
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX launcher behavior is covered on Linux and macOS.")
 def test_posix_utils_installs_agent_skill_command(sandbox, monkeypatch):
     mod = load_agent_sync_module(sandbox)
@@ -897,6 +914,76 @@ def test_windows_reparse_point_is_detected_without_pathlib_junction_support(sand
     )
 
     assert mod._is_link_like(ReparsePoint())
+
+
+def test_windows_junction_command_quotes_cmd_metacharacters(sandbox, monkeypatch, tmp_path):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    source = tmp_path / "source&folder"
+    destination = tmp_path / "destination&folder"
+    source.mkdir()
+    captured = {}
+
+    def fake_external(argv, **_kwargs):
+        captured["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(mod, "_run_external", fake_external)
+    assert mod.make_link(source, destination, is_dir=True)
+    assert captured["argv"][:5] == ["cmd.exe", "/d", "/c", "mklink", "/J"]
+    assert captured["argv"][5] == str(destination).replace("&", "^&")
+    assert captured["argv"][6] == str(source).replace("&", "^&")
+
+
+def test_windows_process_probe_detects_node_wrapped_claude(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    calls = []
+
+    def fake_external(argv, **_kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "node.exe claude.js --print", "")
+
+    monkeypatch.setattr(mod, "_run_external", fake_external)
+    assert mod._process_running("claude") is True
+    assert calls[0][0] == "powershell.exe"
+
+
+def test_windows_atomic_write_retries_locked_replace(sandbox, monkeypatch, tmp_path):
+    mod = load_agent_sync_module(sandbox)
+    target = tmp_path / "locked.json"
+    target.write_text("old", encoding="utf-8")
+    real_replace = mod.os.replace
+    attempts = []
+
+    def flaky_replace(source, destination):
+        attempts.append((source, destination))
+        if len(attempts) < 3:
+            raise PermissionError("sharing violation")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(mod.os, "replace", flaky_replace)
+    monkeypatch.setattr(mod.time, "sleep", lambda _seconds: None)
+    mod._atomic_write_text(target, "new")
+    assert target.read_text(encoding="utf-8") == "new"
+    assert len(attempts) == 3
+
+
+def test_windows_alert_translation_prefers_powershell_twin(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    translator = sandbox.vault / "03-INFRA" / "alert-translate.ps1"
+    translator.parent.mkdir(parents=True, exist_ok=True)
+    translator.write_text("Write-Output translated", encoding="utf-8")
+    captured = {}
+
+    def fake_run(argv, **_kwargs):
+        captured["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, "tradotto", "")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    assert mod._localize_alert(mod.Env(), "English alert") == "tradotto"
+    assert captured["argv"][0] == "powershell.exe"
 
 
 def test_windows_codex_eager_junction_is_converted_without_touching_active_view(sandbox, monkeypatch):

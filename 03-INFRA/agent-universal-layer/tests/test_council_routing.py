@@ -595,6 +595,16 @@ def test_cmd_routing_status_prints_blocked_role_with_diagnostics(monkeypatch, tm
     assert "escluso dalla policy zero-retention" in output
 
 
+def test_windows_probe_wraps_npm_cmd_shim(monkeypatch):
+    routing = load_routing()
+    monkeypatch.setattr(routing.os, "name", "nt")
+    monkeypatch.setattr(routing.shutil, "which", lambda _name: r"C:\Tools\opencode.cmd")
+
+    assert routing._windows_command_argv(["opencode", "models"]) == [
+        "cmd.exe", "/d", "/s", "/c", r"C:\Tools\opencode.cmd", "models"
+    ]
+
+
 # --- routing.py parser error paths: every RoutingContractError branch -----
 
 

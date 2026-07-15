@@ -52,6 +52,18 @@ VAULT_DATA = Path(os.environ.get("AGENT_VAULT_DATA") or str(HOME / "KnowledgeVau
 MANIFEST = VAULT_DATA / "03-INFRA" / "agent-universal-layer" / "mcp" / "manifest.yaml"
 IS_WINDOWS = platform.system() == "Windows"
 
+
+def _opencode_config_path() -> Path:
+    """Return OpenCode's native config path for the current platform."""
+    if not IS_WINDOWS:
+        return HOME / ".config" / "opencode" / "opencode.json"
+    appdata_path = Path(os.environ.get("APPDATA") or (HOME / "AppData" / "Roaming")) / "opencode" / "opencode.json"
+    legacy_path = HOME / ".config" / "opencode" / "opencode.json"
+    # OpenCode installations created before the native Windows layout may
+    # still use XDG-style .config. Preserve that live config and use APPDATA
+    # for new installs.
+    return legacy_path if legacy_path.exists() and not appdata_path.exists() else appdata_path
+
 # Antigravity reaches HTTP MCP servers through this local bridge.  It is
 # intentionally exact: an implicit npx update would run new code as the user.
 MCP_REMOTE_PACKAGE = "mcp-remote@0.1.38"
@@ -105,7 +117,8 @@ def r_antigravity(name, s):
     if s["transport"] == "stdio":
         return {"command": s["command"], "args": s.get("args", []), "env": s.get("env", {})}
     hdr = f"Authorization: Bearer ${{{s['auth']['env']}}}"
-    return {"command": "npx", "args": ["-y", MCP_REMOTE_PACKAGE, s["url"], "--header", hdr], "env": {}}
+    return {"command": "npx.cmd" if IS_WINDOWS else "npx",
+            "args": ["-y", MCP_REMOTE_PACKAGE, s["url"], "--header", hdr], "env": {}}
 
 def r_opencode(name, s):
     if s["transport"] == "stdio":
@@ -131,10 +144,20 @@ def os_view(s):
     server has a 'windows:' block (command/args/env/... override), apply it;
     otherwise discard the 'windows' key. This way the single manifest serves
     both OSes — Windows values get populated by running render.py on the
-    Windows machine, not guessed."""
-    if IS_WINDOWS and isinstance(s.get("windows"), dict):
-        merged = {**s, **s["windows"]}
+    Windows machine, not guessed. Common interpreter wrapper names are
+    normalized after the explicit override is applied, because MCP clients
+    launch stdio commands directly and do not consistently resolve .cmd
+    shims the way an interactive shell does."""
+    if IS_WINDOWS:
+        merged = {**s, **(s.get("windows") or {})}
         merged.pop("windows", None)
+        if merged.get("transport") == "stdio":
+            command = merged.get("command")
+            merged["command"] = {
+                "npx": "npx.cmd",
+                "node": "node.exe",
+                "python3": "python",
+            }.get(command, command)
         return merged
     return {k: v for k, v in s.items() if k != "windows"}
 
@@ -188,6 +211,25 @@ def keep_extras(gen, live, label):
             print(f">>> OUTSIDE THE MANIFEST [{label}]: server '{k}' KEPT. Register it in manifest.yaml to propagate it everywhere.")
     return out
 
+
+def preserve_server_fields(gen, live):
+    """Preserve fields added by a live MCP client on managed servers.
+
+    MCP clients may materialize runtime metadata or an environment overlay
+    that is intentionally absent from the portable manifest. The manifest
+    remains authoritative for fields it declares, while undeclared live
+    fields stay additive and are carried through the surgical writers.
+    """
+    out = {}
+    for name, spec in gen.items():
+        merged = dict(spec)
+        current = live.get(name)
+        if isinstance(current, dict):
+            for key, value in current.items():
+                merged.setdefault(key, value)
+        out[name] = merged
+    return out
+
 # ---- loading live configs (MCP section only) ---------------------------
 
 def load_current(cli):
@@ -205,7 +247,7 @@ def load_current(cli):
             d = json.loads(path.read_text("utf-8"))
             return {k: {kk: vv for kk, vv in v.items() if kk != "$typeName"} for k, v in d.get("mcpServers", {}).items()}
         if cli == "opencode":
-            path = HOME / ".config/opencode/opencode.json"
+            path = _opencode_config_path()
             return json.loads(path.read_text("utf-8")).get("mcp", {})
     except FileNotFoundError:
         return None     # CLI not installed on this machine
@@ -272,7 +314,10 @@ def cmd_diff():
         seen = set()
         for name, s in wanted.items():
             key = spec["name"](name); seen.add(key)
-            exp = redact(spec["render"](name, s))
+            exp = spec["render"](name, s)
+            if isinstance(current.get(key), dict) and isinstance(exp, dict):
+                exp = preserve_server_fields({key: exp}, {key: current[key]})[key]
+            exp = redact(exp)
             if key not in current:
                 print(f"  [MISSING]  {name} -> the live file has no '{key}'"); bad += 1; continue
             out = []
@@ -409,7 +454,16 @@ def _atomic_write_text(path, text, encoding="utf-8"):
     if tmp.exists():
         tmp = path.with_name(f"{path.name}.{os.getpid()}-{time.monotonic_ns()}.tmp")
     _secure_create_text(tmp, text, encoding=encoding, mode=mode)
-    os.replace(tmp, path)
+    delay = 0.05
+    for attempt in range(5):
+        try:
+            os.replace(tmp, path)
+            break
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(delay)
+            delay *= 2
 
 def write_json_section(path, key, new_section, live_section, serialize, indent_exact=None):
     if not path.exists():
@@ -478,7 +532,7 @@ def write_json_section(path, key, new_section, live_section, serialize, indent_e
     return 0
 
 def write_opencode():
-    path = HOME / ".config/opencode/opencode.json"
+    path = _opencode_config_path()
     if not path.exists():
         print(">>> opencode.json not present: OpenCode never launched yet (no default config file), skipping."); return 3
     try:
@@ -491,6 +545,7 @@ def write_opencode():
     if man is None:
         return 2
     gen = {n: r_opencode(n, s) for n, s in man.items() if "opencode" in s["targets"]}
+    gen = preserve_server_fields(gen, live.get("mcp", {}))
     gen = keep_extras(gen, live.get("mcp", {}), "opencode")
     new_mcp = reorder(gen, live.get("mcp", {}))
     return write_json_section(path, "mcp", new_mcp, live.get("mcp", {}), s_inline)
@@ -517,6 +572,7 @@ def write_antigravity():
         for k, v in live_servers.get(n, {}).items():   # preserve internal extras (e.g. $typeName)
             d.setdefault(k, v)
         gen[n] = d
+    gen = preserve_server_fields(gen, live_servers)
     gen = keep_extras(gen, live_servers, "antigravity")
     new_servers = reorder(gen, live_servers)
     return write_json_section(path, "mcpServers", new_servers, live_servers, s_standard)
@@ -668,6 +724,7 @@ def write_claude(path=None):
             continue
         d = r_claude(n, s)   # http header already as ${VAR}: no literal token in .claude.json
         gen[n] = d
+    gen = preserve_server_fields(gen, live_mcp)
     gen = keep_extras(gen, live_mcp, "claude")
     new_mcp = reorder(gen, live_mcp)
     return write_json_section(path, "mcpServers", new_mcp, live_mcp, s_standard, indent_exact="  ")

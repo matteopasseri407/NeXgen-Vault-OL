@@ -16,7 +16,14 @@ $Vault   = if ($env:KNOWLEDGE_VAULT_PATH) { $env:KNOWLEDGE_VAULT_PATH } else { J
 $Branch  = if ($env:KNOWLEDGE_VAULT_BRANCH) { $env:KNOWLEDGE_VAULT_BRANCH } else { "main" }
 $Layer   = Join-Path $Vault "03-INFRA\agent-universal-layer"
 $Canon   = Join-Path $Layer "instructions\AGENTS.md"
-$OcJson  = Join-Path $HomeDir ".config\opencode\opencode.json"
+$AppDataRoot = if ($env:APPDATA) { $env:APPDATA } else { Join-Path $HomeDir "AppData\Roaming" }
+$AppDataOcJson = Join-Path $AppDataRoot "opencode\opencode.json"
+$LegacyOcJson  = Join-Path $HomeDir ".config\opencode\opencode.json"
+$OcJson = if ((Test-Path -LiteralPath $LegacyOcJson) -and -not (Test-Path -LiteralPath $AppDataOcJson)) {
+  $LegacyOcJson
+} else {
+  $AppDataOcJson
+}
 
 $RemoteConfigError = $false
 if ($env:KNOWLEDGE_VAULT_REMOTE) {

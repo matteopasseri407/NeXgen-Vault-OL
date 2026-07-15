@@ -26,6 +26,18 @@ LEGACY_END_HEADING = "### Motivazioni concise"
 PROBE_TIMEOUT_SECONDS = 10
 
 
+def _windows_command_argv(argv: list[str]) -> list[str]:
+    """Resolve npm command shims and invoke .cmd/.bat through cmd.exe."""
+    if os.name != "nt" or not argv:
+        return list(argv)
+    executable = shutil.which(argv[0])
+    if not executable:
+        return list(argv)
+    if executable.casefold().endswith((".cmd", ".bat")):
+        return ["cmd.exe", "/d", "/s", "/c", executable, *argv[1:]]
+    return [executable, *argv[1:]]
+
+
 class RoutingContractError(ValueError):
     """The private decision document cannot safely form a verified Council proposal."""
 
@@ -172,7 +184,7 @@ def load_routing_plan(path: Path) -> RoutingPlan:
 def _run_probe(argv: list[str]) -> tuple[bool, str]:
     try:
         result = subprocess.run(
-            argv,
+            _windows_command_argv(argv),
             capture_output=True,
             text=True,
             timeout=PROBE_TIMEOUT_SECONDS,

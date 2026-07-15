@@ -221,7 +221,8 @@ function Invoke-Readonly([string]$Prompt, [string]$LogFile) {
       # effect as claude's '' | above -- and since the prompt travels via
       # stdin, not an argument, codex was never exposed to the cmd.exe
       # reparsing problem Resolve-CliInvoker exists for.
-      $Prompt | codex exec -s read-only -m $Model -C $Vault - 2>&1 | Tee-Object -FilePath $LogFile
+      $cli = Resolve-CliInvoker 'codex'
+      $Prompt | & $cli exec -s read-only -m $Model -C $Vault - 2>&1 | Tee-Object -FilePath $LogFile
     }
     'agy' {
       # Same stdin-isolation reasoning as claude above.
@@ -247,7 +248,8 @@ function Invoke-Write([string]$Prompt, [string]$LogFile, [string]$Workdir) {
       # here is prompt-level only -- Codex has no per-command block like
       # Claude's --disallowedTools; the clone having no `origin` remote is
       # the actual guarantee for every runner alike.
-      $Prompt | codex exec -s workspace-write -m $Model -C $Workdir - 2>&1 | Tee-Object -FilePath $LogFile
+      $cli = Resolve-CliInvoker 'codex'
+      $Prompt | & $cli exec -s workspace-write -m $Model -C $Workdir - 2>&1 | Tee-Object -FilePath $LogFile
     }
     'agy' {
       # Prompt-level only too, same caveat as codex above.

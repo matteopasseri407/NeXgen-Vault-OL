@@ -6,13 +6,15 @@
 # into the non-discovered library `~/.agents/skill-library/` and builds only the
 # runtime views you deliberately ask for. You choose here; the rest is synced.
 #
-#   cp skills.manifest.yaml.example skills.manifest.yaml
+#   Linux/macOS: cp skills.manifest.yaml.example skills.manifest.yaml
+#   Windows:     Copy-Item skills.manifest.yaml.example skills.manifest.yaml
 #
 # Workflow ("choose a skill once -> it's everywhere"):
 #   1. add an entry under `skills:` below
 #   2. git commit + push (so every machine sees it)
 #   3. on each machine: git pull && python3 03-INFRA/scripts/skills-sync.py --apply
-#      (or just let `agent-sync guard` run it for you)
+#      (Windows: py -3 03-INFRA/scripts/skills-sync.py --apply; or let
+#       `agent-sync guard` run it for you)
 #
 # RULES (these mirror the MCP manifest, mcp/manifest.yaml):
 #   origin: vault   -> vendored inside this repo at

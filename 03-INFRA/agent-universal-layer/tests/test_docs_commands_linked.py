@@ -52,9 +52,8 @@ NOT_LINKED_ALLOWLIST: dict[str, str] = {}
 # LINKED_COMMANDS entries that are POSIX-only (windows: False) and
 # referenced in docs without a caveat inline every single time. Accepted via
 # allowlist + reason instead of a fragile "OS caveat within N lines" text
-# heuristic -- both are real, deliberate, no-.ps1-twin-by-design commands.
+# heuristic. Only bring-your-own vault-ocr-local remains in this category.
 POSIX_ONLY_DOC_ALLOWLIST = {
-    "firecrawl-local": "L0/POSIX wrapper by design (firecrawl.md, AGENTS.md); no .ps1 twin ships",
     "vault-ocr-local": "bring-your-own POSIX tool by design (vault-ocr.md, AGENTS.md); no .ps1 twin ships",
 }
 

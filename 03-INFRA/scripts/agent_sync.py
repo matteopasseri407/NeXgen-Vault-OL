@@ -59,6 +59,15 @@ from config_schema import (
 
 IS_WINDOWS = platform.system() == "Windows"
 
+
+def _opencode_config_path(home: Path) -> Path:
+    """Return OpenCode's native config path without using Unix .config on Windows."""
+    if not IS_WINDOWS:
+        return home / ".config" / "opencode" / "opencode.json"
+    appdata_path = Path(os.environ.get("APPDATA") or (home / "AppData" / "Roaming")) / "opencode" / "opencode.json"
+    legacy_path = home / ".config" / "opencode" / "opencode.json"
+    return legacy_path if legacy_path.exists() and not appdata_path.exists() else appdata_path
+
 HELP_TEXT = """agent_sync modes:
   pull     Pull the KnowledgeVault from the remote and run healthcheck. Does not rewrite CLI runtime files.
   guard    Recurring safe propagation: pull, regenerate CLI runtime files, run healthcheck. Does not push.
@@ -350,6 +359,20 @@ def _remove_path(path: Path) -> None:
         path.unlink()
 
 
+def _cmd_escape(value: Path | str) -> str:
+    """Escape a path passed as an argv item to ``cmd.exe``.
+
+    ``subprocess`` quotes argv items containing whitespace before handing
+    them to cmd.exe.  Inside those quotes, caret-escaping ``&`` would become
+    part of the literal path, so only escape metacharacters on unquoted
+    paths.  This keeps both ``source&folder`` and ``source & folder`` safe.
+    """
+    text = str(value)
+    if any(char.isspace() for char in text):
+        return text
+    return re.sub(r"([&|<>^])", lambda match: "^" + match.group(1), text)
+
+
 def make_link(src: Path, dst: Path, *, is_dir: bool) -> bool:
     """Ensures dst points at src. POSIX: symlink. Windows: SymbolicLink for
     files, Junction for directories (no elevated privilege needed), falling
@@ -397,16 +420,8 @@ def make_link(src: Path, dst: Path, *, is_dir: bool) -> bool:
                 raise
         return True
     if is_dir:
-        # RISK (flagged in a full-codebase audit, Gemini via agy, 2026-07-09,
-        # NOT verified live on Windows -- needs physical access, see
-        # agentic-layer-concept-map.md backlog): subprocess's list2cmdline
-        # only quotes on space/tab/quote, not on cmd.exe metacharacters
-        # (&, |, <, >, ^). A dst/src path containing one of those without a
-        # space would reach cmd.exe unquoted and be parsed as a shell
-        # operator. Do not "fix" this blind with hand-rolled quoting; a
-        # wrong escaping scheme is its own bug and this needs a real
-        # Windows run to confirm behavior before changing it.
-        r = _run_external(["cmd", "/c", "mklink", "/J", str(dst), str(src)],
+        r = _run_external(["cmd.exe", "/d", "/c", "mklink", "/J",
+                           _cmd_escape(dst), _cmd_escape(src)],
                            timeout=15, capture_output=True, text=True)
         if r.returncode == 0:
             return True
@@ -432,19 +447,24 @@ def resolve_cmd(name: str) -> str | None:
 
 
 def _process_running(name: str) -> bool:
-    # RISK (flagged in a cross-vendor audit, 2026-07-09, NOT verified live on
-    # Windows -- needs physical access, see agentic-layer-concept-map.md
-    # backlog): if the npm-installed "claude" CLI runs as a node.exe wrapper
-    # rather than a standalone claude.exe on Windows, `tasklist /FI
-    # "IMAGENAME eq claude.exe"` never matches, and the caller (which skips
-    # rewriting .claude.json while Claude is "running") always sees it as
-    # closed -- rewriting live under it. Confirm the real process name on the
-    # Windows machine before trusting this; do not "fix" it blind, a wrong
-    # guess (e.g. matching any node.exe) would create a worse false positive.
+    """Detect a live CLI, including npm-installed ``node.exe`` wrappers."""
     try:
         if not IS_WINDOWS:
             r = _run_external(["pgrep", "-x", name], timeout=15, capture_output=True)
             return r.returncode == 0
+        powershell_query = (
+            "(Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\").CommandLine"
+        )
+        for probe in (
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", powershell_query],
+            ["wmic.exe", "process", "where", "name='node.exe'", "get", "CommandLine"],
+        ):
+            try:
+                r = _run_external(probe, timeout=15, capture_output=True, text=True)
+            except OSError:
+                continue
+            if r.returncode == 0 and name.casefold() in (r.stdout or "").casefold():
+                return True
         r = _run_external(["tasklist", "/FI", f"IMAGENAME eq {name}.exe"], timeout=15, capture_output=True, text=True)
         return name.lower() in r.stdout.lower()
     except (OSError, FileNotFoundError):
@@ -483,7 +503,16 @@ def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> Non
             os.chmod(tmp, old_mode)
         except OSError:
             pass
-    os.replace(tmp, path)
+    delay = 0.05
+    for attempt in range(5):
+        try:
+            os.replace(tmp, path)
+            break
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(delay)
+            delay *= 2
 
 
 def _write_if_different(path: Path, content: str) -> bool:
@@ -852,7 +881,7 @@ def _sync_opencode_instructions(env: Env, canon: Path) -> None:
     # at all -- a fresh install left OpenCode with no bootstrap pointer, and
     # agent-doctor's "OpenCode instructions -> AGENTS.md" check failed
     # permanently with no code path that could ever fix it.
-    oc_path = env.home / ".config" / "opencode" / "opencode.json"
+    oc_path = _opencode_config_path(env.home)
     if not oc_path.is_file():
         env.log("instructions: opencode.json not present (OpenCode never launched yet) -- skipping")
         return
@@ -918,8 +947,8 @@ def antigravity_mcp(env: Env) -> bool:
 # command silently falls through the cracks of.
 #   source:   'engine' -> env.engine_scripts, 'vault' -> env.vault_scripts.
 #   posix/windows: whether a same-named <name>.sh / <name>.ps1 twin ships
-#     and should be linked on that OS (firecrawl-local and vault-ocr-local
-#     are POSIX-only by design, no .ps1 twin ships).
+#     and should be linked on that OS (vault-ocr-local remains POSIX-only by
+#     design, while firecrawl-local ships a native .ps1 twin).
 #   optional: bring-your-own -- absence of the source is the documented
 #     default, not a failure (see _link_util below).
 # agent-skill is deliberately NOT here: utils() generates its wrapper from a
@@ -931,7 +960,7 @@ LINKED_COMMANDS: dict[str, dict[str, object]] = {
     "agent-doctor":    {"source": "engine", "posix": True,  "windows": True},
     "agent-now":       {"source": "engine", "posix": True,  "windows": True},
     "council":         {"source": "engine", "posix": True,  "windows": True},
-    "firecrawl-local": {"source": "engine", "posix": True,  "windows": False},
+    "firecrawl-local": {"source": "engine", "posix": True,  "windows": True},
     "vault-push":      {"source": "vault",  "posix": True,  "windows": True},
     "vault-groom":     {"source": "vault",  "posix": True,  "windows": True},
     "vault-ocr-local": {"source": "vault",  "posix": True,  "windows": False, "optional": True},
@@ -1658,15 +1687,28 @@ def _localize_alert(env: Env, msg: str) -> str:
     (if non-empty) replaces it; any failure (missing, not executable,
     non-zero exit, timeout, empty output) falls back to the English
     original — a broken translator must never swallow a real alert."""
-    translator = env.vault_data / "03-INFRA" / "alert-translate.sh"
-    if not (translator.is_file() and os.access(translator, os.X_OK)):
-        return msg
-    try:
-        r = subprocess.run(["bash", str(translator)], input=msg, capture_output=True, text=True, timeout=5)
-        if r.returncode == 0 and r.stdout.strip():
-            return r.stdout
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+    data_dir = env.vault_data / "03-INFRA"
+    commands: list[list[str]] = []
+    if IS_WINDOWS:
+        ps_translator = data_dir / "alert-translate.ps1"
+        if ps_translator.is_file():
+            commands.append([
+                "powershell.exe", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-File", str(ps_translator),
+            ])
+        cmd_translator = data_dir / "alert-translate.bat"
+        if cmd_translator.is_file():
+            commands.append(["cmd.exe", "/d", "/c", str(cmd_translator)])
+    translator = data_dir / "alert-translate.sh"
+    if translator.is_file() and (not IS_WINDOWS or os.access(translator, os.X_OK)):
+        commands.append(["bash", str(translator)])
+    for command in commands:
+        try:
+            r = subprocess.run(command, input=msg, capture_output=True, text=True, timeout=5)
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout
+        except (OSError, subprocess.TimeoutExpired):
+            continue
     return msg
 
 

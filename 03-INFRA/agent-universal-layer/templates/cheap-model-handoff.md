@@ -100,10 +100,23 @@ Use for broad or repeated work where an external cheap runtime saves meaningful 
 <cheap-cli> run --dir "$PWD" --model <cheap-model> "<handoff>" < /dev/null
 ```
 
+On Windows PowerShell, pass the handoff as an argument and use the configured
+wrapper directly, for example:
+
+```powershell
+& cheap-cli run --dir (Get-Location) --model <cheap-model> "<handoff>"
+```
+
 For bulk-only work:
 
 ```bash
 <cheap-cli> run --dir "$PWD" --agent bulk "<handoff>" < /dev/null
+```
+
+PowerShell equivalent:
+
+```powershell
+& cheap-cli run --dir (Get-Location) --agent bulk "<handoff>"
 ```
 
 Notes:

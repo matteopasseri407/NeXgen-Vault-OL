@@ -65,10 +65,15 @@ class Sandbox:
         return self.home / "bin-stubs"
 
     def live_config_path(self, cli: str) -> Path:
+        opencode = (
+            self.home / "AppData" / "Roaming" / "opencode" / "opencode.json"
+            if os.name == "nt"
+            else self.home / ".config" / "opencode" / "opencode.json"
+        )
         return {
             "claude": self.home / ".claude.json",
             "codex": self.home / ".codex" / "config.toml",
-            "opencode": self.home / ".config" / "opencode" / "opencode.json",
+            "opencode": opencode,
             "antigravity": self.home / ".gemini" / "antigravity" / "mcp_config.json",
         }[cli]
 
@@ -86,11 +91,14 @@ class Sandbox:
         e["HOME"] = str(self.home)
         e["USERPROFILE"] = str(self.home)
         e["KNOWLEDGE_VAULT_PATH"] = str(self.vault)
+        if os.name == "nt":
+            e["APPDATA"] = str(self.home / "AppData" / "Roaming")
+            e["LOCALAPPDATA"] = str(self.home / "AppData" / "Local")
         # Most provisioning tests exercise local mutations, not Git transport.
         # Keep their pull state explicitly healthy and offline from real remotes.
         # Tests for remote failures override this value deliberately.
         e["KNOWLEDGE_VAULT_REMOTE"] = "local"
-        e["PATH"] = f"{self.bin_stubs}:{e.get('PATH', '')}"
+        e["PATH"] = f"{self.bin_stubs}{os.pathsep}{e.get('PATH', '')}"
         for key in (
             "TELEGRAM_BOT_TOKEN",
             "TELEGRAM_CHAT_ID",
@@ -145,7 +153,7 @@ def _copy_engine_scripts(sandbox: Sandbox) -> None:
         "agent-sync.sh", "agent-sync.ps1", "agent_sync.py", "agent-skill.py", "skills-sync.py", "config_schema.py",
         "agent-doctor.sh", "agent-doctor.ps1",
         "council.sh", "council.ps1", "vault-push.sh", "vault-push.ps1", "vault-groom.sh", "vault-groom.ps1",
-        "vault_groom_audit.py", "agent-now.sh", "agent-now.ps1", "firecrawl-local.sh",
+        "vault_groom_audit.py", "agent-now.sh", "agent-now.ps1", "firecrawl-local.sh", "firecrawl-local.ps1",
     ):
         dst = sandbox.scripts_dir / name
         shutil.copy2(REAL_SCRIPTS / name, dst)
@@ -187,6 +195,9 @@ def sandbox(tmp_path, monkeypatch) -> Sandbox:
     _make_bin_stubs(sb)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
+    if os.name == "nt":
+        monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+        monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
     monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sb.vault))
     return sb
 
@@ -252,6 +263,12 @@ def load_agent_sync_module(sandbox: Sandbox):
 
 def run_agent_sync(sandbox: Sandbox, mode: str = "apply", timeout: int = 60) -> subprocess.CompletedProcess:
     sandbox.assert_is_sandbox()
+    if os.name == "nt":
+        return subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+             str(sandbox.scripts_dir / "agent-sync.ps1"), mode],
+            env=sandbox.env(), capture_output=True, text=True, timeout=timeout,
+        )
     return subprocess.run(
         ["bash", str(sandbox.scripts_dir / "agent-sync.sh"), mode],
         env=sandbox.env(),
@@ -274,6 +291,12 @@ def run_agent_sync_python(sandbox: Sandbox, mode: str = "apply", timeout: int = 
 
 def run_agent_doctor(sandbox: Sandbox, *args: str, timeout: int = 60) -> subprocess.CompletedProcess:
     sandbox.assert_is_sandbox()
+    if os.name == "nt":
+        return subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+             str(sandbox.scripts_dir / "agent-doctor.ps1"), *args],
+            env=sandbox.env(), capture_output=True, text=True, timeout=timeout,
+        )
     return subprocess.run(
         ["bash", str(sandbox.scripts_dir / "agent-doctor.sh"), *args],
         env=sandbox.env(),

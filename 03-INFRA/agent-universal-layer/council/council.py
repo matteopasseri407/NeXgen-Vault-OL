@@ -108,7 +108,11 @@ from routing import (  # noqa: E402
 )
 
 LEAK_SCAN_DIR = ENGINE_ROOT.parent / "leak-scan"
-SESSIONS_DIR = Path.home() / ".local" / "state" / "council" / "sessions"
+if os.name == "nt":
+    _LOCAL_STATE_ROOT = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+else:
+    _LOCAL_STATE_ROOT = Path.home() / ".local" / "state"
+SESSIONS_DIR = _LOCAL_STATE_ROOT / "council" / "sessions"
 DEFAULT_TTL_DAYS = 7
 DEFAULT_MAX_ROUNDS = 3
 DEFAULT_MAX_SEATS = 5
@@ -129,6 +133,24 @@ class SeatRunError(RuntimeError):
     def __init__(self, message: str, kind: str = "error") -> None:
         super().__init__(message)
         self.kind = kind
+
+
+def _private_mkdir(path: Path, *, parents: bool = False, exist_ok: bool = False) -> None:
+    """Create a private directory without pretending mode bits secure NTFS."""
+    kwargs = {} if os.name == "nt" else {"mode": 0o700}
+    path.mkdir(parents=parents, exist_ok=exist_ok, **kwargs)
+
+
+def _windows_command_argv(argv: list[str]) -> list[str]:
+    """Resolve npm command shims and invoke .cmd/.bat through cmd.exe."""
+    if os.name != "nt" or not argv:
+        return list(argv)
+    executable = shutil.which(argv[0])
+    if not executable:
+        return list(argv)
+    if executable.casefold().endswith((".cmd", ".bat")):
+        return ["cmd.exe", "/d", "/s", "/c", executable, *argv[1:]]
+    return [executable, *argv[1:]]
 
 
 @dataclass
@@ -888,14 +910,14 @@ def new_session_dir(label: str) -> Path:
     libera (verificato dal vivo: senza questo, due sessioni ravvicinate con lo
     stesso label finiscono nella stessa directory)."""
     _cleanup_sessions(DEFAULT_TTL_DAYS)
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _private_mkdir(SESSIONS_DIR, parents=True, exist_ok=True)
     _set_private_mode(SESSIONS_DIR, 0o700)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     base_name = f"council-{slugify(label)}-{timestamp}"
     session_dir = SESSIONS_DIR / base_name
     while True:
         try:
-            session_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
+            _private_mkdir(session_dir, parents=True, exist_ok=False)
             _set_private_mode(session_dir, 0o700)
             return session_dir
         except FileExistsError:
@@ -1142,7 +1164,7 @@ def _isolated_seat_env(cli: str, session_dir: Path) -> dict[str, str]:
 
     if cli == "codex":
         codex_home = isolation_dir / "codex-home"
-        codex_home.mkdir(mode=0o700)
+        _private_mkdir(codex_home)
         _set_private_mode(codex_home, 0o700)
         real_codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
         real_auth = real_codex_home / "auth.json"
@@ -1159,7 +1181,7 @@ def _isolated_seat_env(cli: str, session_dir: Path) -> dict[str, str]:
             env["OPENAI_API_KEY"] = os.environ["OPENAI_API_KEY"]
     elif cli == "opencode":
         config_home = isolation_dir / "opencode-config"
-        config_home.mkdir(mode=0o700)
+        _private_mkdir(config_home)
         _set_private_mode(config_home, 0o700)
         env["XDG_CONFIG_HOME"] = str(config_home)
     # agy: base allowlist only -- see the docstring above for what was
@@ -1372,7 +1394,7 @@ def run_seat(
     try:
         try:
             proc = subprocess.Popen(
-                invocation.argv,
+                _windows_command_argv(invocation.argv),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 stdin=subprocess.PIPE if invocation.stdin_text is not None else subprocess.DEVNULL,

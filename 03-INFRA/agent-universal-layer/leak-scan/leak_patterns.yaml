@@ -10,7 +10,7 @@
 leak_hard:
   - '\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'            # IPv4
   - '/home/[A-Za-z0-9._-]+'                              # Linux home dir
-  - 'C:\\Users\\[A-Za-z0-9._-]+'                         # Windows home dir
+  - '(?i)C:\\Users\\[A-Za-z0-9._-]+'                    # Windows home dir
   - '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'     # email
   # long hex token/hash, EXCLUDING a full-commit-SHA/digest pin in a known-safe
   # syntactic context: right after '@' (GitHub Actions `uses: owner/repo@<sha>`)

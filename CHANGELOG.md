@@ -8,6 +8,20 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## [0.5.3] - 2026-07-15
+
+Secondo pass di compatibilità Windows, con copertura dei percorsi nativi, dei wrapper CLI e delle scritture concorrenti su NTFS.
+
+### Fixed (Windows)
+
+- I processi CLI installati via npm vengono rilevati anche quando girano dentro `node.exe`, e gli shim `.cmd`/`.bat` vengono invocati tramite `cmd.exe` in Council e nei probe di routing.
+- I percorsi OpenCode usano `%APPDATA%`, il Council usa `%LOCALAPPDATA%` per le sessioni, e le scritture atomiche ritentano in caso di `PermissionError` temporaneo.
+- `agent-sync` quota correttamente i percorsi delle Junction, supporta i traduttori `alert-translate.ps1` e installa il wrapper PowerShell nativo di `firecrawl-local`.
+- Il renderer MCP normalizza `npx`/`node`/`python3` nei nomi Windows nativi, preserva i campi extra aggiunti dai client live e non trasforma più un overlay runtime Codex in un falso drift fatale.
+- Aggiunti il runner pytest `tests/run.ps1`, la policy `.gitattributes` per i file PowerShell e la documentazione con i comandi equivalenti Windows.
+
+Verifica: `477 passed, 98 skipped` sulla suite `03-INFRA/agent-universal-layer/tests` eseguita su Windows con Python 3.14.
+
 ## [0.5.2] - 2026-07-15
 
 Fix robustezza per il porting Windows (isolamento environment e junction NTFS).

@@ -146,7 +146,8 @@ def main(argv: list[str] | None = None) -> int:
             "you're knowingly accepting, regenerate the baseline with:"
         )
         rel_script = Path(__file__).resolve().relative_to(REPO_ROOT)
-        print(f"  python3 {rel_script} --generate")
+        interpreter = "python" if sys.platform == "win32" else "python3"
+        print(f"  {interpreter} {rel_script} --generate")
         print(f"and commit the updated {args.baseline.relative_to(REPO_ROOT)}.")
         return 1
 

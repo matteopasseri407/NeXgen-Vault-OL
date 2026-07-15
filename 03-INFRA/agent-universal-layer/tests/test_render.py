@@ -581,6 +581,33 @@ def test_os_view_windows_override(sandbox):
     assert plain_view["command"] == "fake-cmd"
 
 
+def test_os_view_windows_normalizes_common_mcp_wrappers(sandbox):
+    mod = load_render_module(sandbox)
+    mod.IS_WINDOWS = True
+    base = {"transport": "stdio", "args": ["server.js"], "targets": ["codex"]}
+
+    assert mod.os_view({**base, "command": "npx"})["command"] == "npx.cmd"
+    assert mod.os_view({**base, "command": "node"})["command"] == "node.exe"
+    assert mod.os_view({**base, "command": "python3"})["command"] == "python"
+    http = {"transport": "http", "url": "http://127.0.0.1:1", "auth": {"env": "TOKEN"}}
+    assert mod.r_antigravity("http", http)["command"] == "npx.cmd"
+    # An explicit Windows override wins first, then receives the same safe
+    # normalization as a portable manifest entry.
+    overridden = {**base, "command": "python3", "windows": {"command": "npx"}}
+    assert mod.os_view(overridden)["command"] == "npx.cmd"
+
+
+def test_matching_live_server_fields_are_preserved_additively(sandbox):
+    mod = load_render_module(sandbox)
+    generated = {"playwright": {"command": "npx.cmd", "args": ["server"]}}
+    live = {"playwright": {"command": "npx", "args": ["server"], "env": {"RUNTIME": "1"}}}
+
+    merged = mod.preserve_server_fields(generated, live)
+    assert merged["playwright"]["command"] == "npx.cmd"
+    assert merged["playwright"]["args"] == ["server"]
+    assert merged["playwright"]["env"] == {"RUNTIME": "1"}
+
+
 # ---- test 8: nessun env-ref espanso in chiaro nell'output ------------------
 
 def test_redact_masks_secrets_and_env_refs(sandbox):
@@ -720,3 +747,30 @@ def test_written_file_never_contains_expanded_token(sandbox_with_live_configs, c
     # solo che non compaia un valore che SEMBRI un secret espanso, es. un
     # blob esadecimale lungo che non sia gia' uno dei nostri fake-*)
     assert "sk-" not in raw and "AKIA" not in raw
+
+
+def test_windows_opencode_config_uses_appdata_layout(sandbox, monkeypatch):
+    mod = load_render_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    expected = sandbox.home / "AppData" / "Roaming" / "opencode" / "opencode.json"
+    assert mod._opencode_config_path() == expected
+
+
+def test_atomic_write_retries_windows_sharing_violation(sandbox, monkeypatch, tmp_path):
+    mod = load_render_module(sandbox)
+    target = tmp_path / "config.json"
+    target.write_text("old", encoding="utf-8")
+    real_replace = mod.os.replace
+    attempts = []
+
+    def flaky_replace(source, destination):
+        attempts.append((source, destination))
+        if len(attempts) < 3:
+            raise PermissionError("sharing violation")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(mod.os, "replace", flaky_replace)
+    monkeypatch.setattr(mod.time, "sleep", lambda _seconds: None)
+    mod._atomic_write_text(target, "new")
+    assert target.read_text(encoding="utf-8") == "new"
+    assert len(attempts) == 3
