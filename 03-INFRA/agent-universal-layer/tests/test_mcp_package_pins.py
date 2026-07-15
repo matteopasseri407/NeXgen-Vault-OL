@@ -17,6 +17,7 @@ MANIFEST = REPO / "03-INFRA" / "agent-universal-layer" / "mcp" / "manifest.yaml"
 RENDER = REPO / "03-INFRA" / "agent-universal-layer" / "mcp" / "render.py"
 PLAYWRIGHT_WRAPPER = REPO / "03-INFRA" / "agent-universal-layer" / "mcp" / "playwright-human-safe.mjs"
 EXACT_NPM_PIN = re.compile(r"^(?:@[-a-z0-9_.]+/)?[-a-z0-9_.]+@\d+(?:\.\d+){2}$", re.I)
+NPM_COLD_START_TIMEOUT = 120
 
 
 def _is_exact_npm_pin(package: str) -> bool:
@@ -77,7 +78,11 @@ def test_playwright_wrapper_can_resolve_npm_without_spawning_a_cmd_shim():
         [node, str(PLAYWRIGHT_WRAPPER), "--self-test"],
         capture_output=True,
         text=True,
-        timeout=20,
+        # A GitHub-hosted Windows runner starts with an empty npm cache. This
+        # self-test deliberately prepares the exact reviewed package before
+        # validating its bundle, so it needs the same cold-network budget as
+        # the explicit overlong-PATH regression below.
+        timeout=NPM_COLD_START_TIMEOUT,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -96,7 +101,7 @@ def test_playwright_wrapper_cold_cache_survives_an_overlong_windows_path(tmp_pat
         [node, str(PLAYWRIGHT_WRAPPER), "--self-test"],
         capture_output=True,
         text=True,
-        timeout=90,
+        timeout=NPM_COLD_START_TIMEOUT,
         env=env,
     )
 
