@@ -420,7 +420,7 @@ def test_strict_block_skips_explicitly_when_the_expected_set_cant_be_derived():
     powershell = (repo / "03-INFRA/scripts/agent-doctor.ps1").read_text(encoding="utf-8")
 
     assert "python3 not found -- cannot derive the expected MCP server set" in bash
-    assert "No compatible Python runtime with PyYAML found" in powershell
+    assert "Python 3 with PyYAML not found -- cannot derive the expected MCP server set" in powershell
     assert "render.py not found" in bash
     assert "render.py not found" in powershell
     for text in (bash, powershell):
