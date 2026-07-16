@@ -8,6 +8,14 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## Unreleased
+
+### Security
+
+- Removed the private maintainer publication wrapper from product code.
+  Public release enforcement belongs in GitHub pull-request controls, CI, and
+  signed releases, while private tooling remains outside the repository.
+
 ## [0.5.6] - 2026-07-16
 
 Windows command-launcher follow-up. This release remains Alpha.
@@ -49,7 +57,8 @@ unassisted Windows cold-install gate required for Beta is still open.
 - Playwright uses a Windows-only, fail-closed launcher that invokes npm through `node.exe` and `npm-cli.js`, avoiding Node 24's `spawnSync("npm.cmd")` failure while keeping Linux and macOS on the unchanged pinned `npx` path.
 - Playwright remains mounted on every CLI. The generic Filesystem server stays scoped to the two product roots and scratch Memory remains explicitly opt-in; Google Calendar remains on demand.
 - The Windows doctor now reports legacy skill folders awaiting explicit quarantine. The migration removes NTFS Junction views safely, Codex uses one official discovery root, and its documentation reflects native progressive disclosure correctly.
-- Added the PowerShell `engine-push` maintainer gate, with signed-identity checks and full introduced-history scanning against public patterns plus the private denylist.
+- Added a temporary PowerShell maintainer release gate, later moved out of
+  product code.
 
 Release gate: full Windows pytest suite, public leak scan, real MCP
 `initialize` probes, GitHub Actions, signed commit and signed tag.
@@ -502,8 +511,8 @@ infrastructure for a small team, and the sync/skills work started earlier.
 
 ### Added
 
-- Anti-leak gate (`engine-push`, pre-commit/commit-msg hooks, CI leak-scan)
-  guarding every push to this repo: a single blocked finding stops the push.
+- Anti-leak protections, including local hooks and CI leak-scan, guarding
+  public changes: a single blocked finding stops the release path.
 - Regression test suite (`tests/run.sh`, 40 pytest cases) covering render.py,
   the provisioner, skills-sync.py and agent-doctor.sh in a sandboxed HOME.
 - `agent_sync.py`: single cross-platform provisioner replacing the old

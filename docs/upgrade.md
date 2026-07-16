@@ -123,9 +123,8 @@ has accepted the data source, and before runtime files are generated.
 - Your `VERSION` never moves by itself.
 - `agent-sync`/`agent-doctor` never `git pull` or `git checkout` your
   clone.
-- Your clone never publishes engine code back upstream. Maintainer-only
-  controls such as `engine-push` and the public-repo anti-leak hooks are for
-  contributors publishing changes to this GitHub repository, not for normal
+- Your clone never publishes engine code back upstream. GitHub repository
+  controls and CI apply to maintainers publishing changes, not to normal
   private vault usage.
 - A data migration never runs against a schema version newer than what the
   installed engine understands — if that happens (e.g. you rolled the

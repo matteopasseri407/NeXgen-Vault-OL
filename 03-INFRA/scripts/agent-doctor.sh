@@ -684,47 +684,6 @@ else
   warn "Claude settings.json missing (Claude not installed here?)"
 fi
 
-# Public engine repo — anti-leak gates (S0). Maintainer lane: these checks
-# only apply when explicitly enabled by a contributor/maintainer that publishes
-# engine code. Normal end users never push this repo; they only publish their
-# private vault data.
-ENGINE_REPO="${ENGINE_REPO:-$HOME/NeXgen-Engine}"
-ENGINE_MAINTAINER="${NEXGEN_ENGINE_MAINTAINER:-0}"
-if [ "$ENGINE_MAINTAINER" = 1 ] && [ -d "$ENGINE_REPO/.git" ]; then
-  sec "Public engine repo — anti-leak gates (S0)"
-  pushurl=$(git -C "$ENGINE_REPO" config --get remote.origin.pushurl 2>/dev/null || echo "")
-  case "$pushurl" in
-    PUSH-DISABLED*) ok "direct push disabled on the engine clone ($ENGINE_REPO)" ;;
-    *) fail "direct push NOT disabled on the engine clone: git -C $ENGINE_REPO remote set-url --push origin PUSH-DISABLED-use-engine-push" ;;
-  esac
-  fetchurl=$(git -C "$ENGINE_REPO" config --get remote.origin.url 2>/dev/null || echo "")
-  case "$fetchurl" in
-    PUSH-DISABLED*|"") fail "the engine clone's remote.origin.url is not a valid URL" ;;
-    *) ok "engine clone fetch url intact" ;;
-  esac
-  HOOKS_SRC="$UL/sanitize/engine-hooks"
-  if [ -d "$HOOKS_SRC" ]; then
-    for h in pre-commit commit-msg; do
-      if [ -f "$ENGINE_REPO/.git/hooks/$h" ] && [ -f "$HOOKS_SRC/$h" ]; then
-        if cmp -s "$ENGINE_REPO/.git/hooks/$h" "$HOOKS_SRC/$h"; then
-          ok "hook $h installed and aligned with its tracked source"
-        else
-          warn "hook $h installed but DIFFERENT from its tracked source (drift — reinstall from $HOOKS_SRC/$h)"
-        fi
-      else
-        fail "hook $h missing from the engine clone (.git/hooks/$h) — reinstall from $HOOKS_SRC/$h"
-      fi
-    done
-  else
-    warn "anti-leak hook sources not found ($HOOKS_SRC) — cannot verify the engine clone's hooks"
-  fi
-  if command -v engine-push >/dev/null 2>&1; then
-    ok "engine-push available in PATH"
-  else
-    fail "engine-push not found in PATH (expected in ~/.local/bin) — it is the only allowed push channel for the engine repo"
-  fi
-fi
-
 # Consumer engine clone — version pin (S2). Applies only where a consumer
 # clone exists (default ~/.nexgen-engine, or AGENT_ENGINE_ROOT's repo root).
 # Before the cutover this machine has none, so the whole section is skipped
@@ -747,14 +706,6 @@ if [ -d "$CONSUMER_ENGINE_REPO/.git" ]; then
   else
     warn "no engine pin set ($PIN_FILE missing) — consumer engine version isn't tracked yet, run: git -C $CONSUMER_ENGINE_REPO rev-parse HEAD > $PIN_FILE"
   fi
-  if [ "$ENGINE_MAINTAINER" = 1 ]; then
-    pushurl=$(git -C "$CONSUMER_ENGINE_REPO" config --get remote.origin.pushurl 2>/dev/null || echo "")
-    case "$pushurl" in
-      PUSH-DISABLED*) ok "direct push disabled on the consumer engine clone" ;;
-      *) fail "direct push NOT disabled on the consumer engine clone: git -C $CONSUMER_ENGINE_REPO remote set-url --push origin PUSH-DISABLED-use-engine-push" ;;
-    esac
-  fi
-
   # New-version-available check (B3, informational only, never auto-updates).
   # Fetch is read-only (only moves remote-tracking refs/tags), safe to run
   # here even though this machine never auto-upgrades the pinned commit.

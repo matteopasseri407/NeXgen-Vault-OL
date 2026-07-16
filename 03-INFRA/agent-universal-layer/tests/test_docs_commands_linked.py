@@ -47,12 +47,7 @@ DOC_FILES = sorted(
 # never produces "install" as a candidate in the first place -- an entry
 # for it here was dead weight, unreachable by the check below (2026-07-13
 # adversarial review).
-NOT_LINKED_ALLOWLIST: dict[str, str] = {
-    "engine-push": (
-        "Maintainer-only publication gate. Normal end users never publish the "
-        "public engine; maintainers invoke it through an explicit platform path."
-    ),
-}
+NOT_LINKED_ALLOWLIST: dict[str, str] = {}
 
 # LINKED_COMMANDS entries that are POSIX-only (windows: False) and
 # referenced in docs without a caveat inline every single time. Accepted via
@@ -72,6 +67,16 @@ def _load_real_agent_sync():
 
 
 MOD = _load_real_agent_sync()
+
+
+def test_private_publish_tooling_is_not_shipped_with_the_engine():
+    """Publishing credentials and write-capable maintainer wrappers belong in
+    the private Vault, never in an end-user product checkout or its docs."""
+    private_script = "engine" + "-push"
+    assert not (REAL_SCRIPTS / f"{private_script}.ps1").exists()
+    assert not (REAL_SCRIPTS / f"{private_script}.sh").exists()
+    public_docs = "\n".join(_doc_texts().values())
+    assert private_script not in public_docs
 
 
 def _doc_texts() -> dict[Path, str]:

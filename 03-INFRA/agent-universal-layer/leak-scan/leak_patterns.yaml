@@ -2,8 +2,8 @@
 #
 # FORMS ONLY, NEVER REAL VALUES: this file is meant to be identical in both
 # places it lives — here (public repo, used by CI) and in the maintainer's
-# private vault (used by the local pre-commit/commit-msg hooks and by
-# engine-push). Never add a real value here: actual secrets/personal data
+# private vault (used by local maintainer checks). Never add a real value
+# here: actual secrets/personal data
 # live only in a private denylist file that this repo never contains and
 # that CI never sees.
 

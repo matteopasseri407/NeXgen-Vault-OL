@@ -39,7 +39,7 @@ It assumes you have already chosen the tools you want to use and provides a shar
 
 The public-engine safety gates are for maintainers who publish changes to this repository.
 Normal users push only their private vault data.
-`engine-push`, the repository leak checks, and the disabled direct-push URL protect that publication path.
+GitHub pull requests, CI, release signing, and repository-level branch controls protect that publication path.
 
 NeXgen manages configuration through one canonical source, generated files, configuration checks, and separate write paths for different data types.
 It does not intercept tool calls at runtime.
