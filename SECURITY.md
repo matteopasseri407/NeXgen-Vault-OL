@@ -32,21 +32,14 @@ unrelated gates — don't conflate them:
   third-party model seat. This runs for every user, every session, with no
   opt-out beyond not using Council. See `docs/council.md`'s Guardrails
   section.
-- **`engine-push` and the CI leak-scan are a maintainer-only publishing
-  gate for this GitHub repository.** They exist to stop a contributor from
-  pushing a real secret or personal path into the public engine history.
-  Normal users never run `engine-push`; it has nothing to do with your own
-  vault data or your own Council sessions.
-  The `remote.origin.pushurl` trick (`PUSH-DISABLED-use-engine-push`) and
-  the local `pre-commit`/`commit-msg` hooks that back this discipline are
-  UX guardrails against an accidental `git push`, not an enforced security
-  boundary: both live in a local clone's config and `.git/hooks`, so anyone
-  with filesystem access to that clone (or a fresh clone that never had
-  `engine-push` installed) can bypass them. The technical control that
-  actually survives a malicious or careless local setup is on GitHub's
-  side — branch protection on `main` requires every commit to carry a
-  signature GitHub itself verifies (see "Release signing" below), not a
-  local hook's say-so.
+- **The CI leak-scan is the repository publishing gate.** It runs on every
+  pull request and protects the public history from likely secrets and
+  personal paths. Normal users never publish engine code; this has nothing to
+  do with their private vault data or their Council sessions.
+  GitHub branch protection is the enforcement boundary: `main` should require
+  an approved pull request, passing CI, verified signatures, and no force
+  pushes or branch deletion. Local developer conveniences are not security
+  controls and do not ship with the product.
 
 ## Supported versions
 

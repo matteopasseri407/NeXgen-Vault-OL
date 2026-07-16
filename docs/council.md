@@ -244,9 +244,8 @@ council clean --all           # removes every kept session now
   Council redacts the affected line before it reaches the next relay stage or
   a kept session. The relay can continue with the remaining analysis.
 - Both checks reuse the engine's shared `leak_scan.py` module, but this is a
-  separate, always-on end-user protection — not the same thing as the
-  maintainer-only `engine-push`/CI leak-scan gate that guards publishing to
-  this GitHub repository. See `SECURITY.md`.
+  separate, always-on end-user protection, not the repository CI leak-scan
+  that guards publishing to GitHub. See `SECURITY.md`.
 - **Zero-retention**: a seat without `zero_retention: true` in your
   `seats.yaml` refuses to run unless you pass `--allow-training-risk`.
 - **Quota**: `--max-rounds` (brainstorm) and `--max-seats` (relay) cap how

@@ -64,11 +64,9 @@ don't work around the gate.
 
 ## Publishing
 
-Only the maintainer publishes to this repository's `main` branch — direct
-push is disabled on purpose (`engine-push` is the only channel, gated by a
-leak-scan and commit-signing requirement; see `SECURITY.md`). As a
-contributor you don't need any of that: open a normal pull request from
-your fork and the maintainer merges and publishes it.
+Only the maintainer publishes to this repository's `main` branch. As a
+contributor, open a normal pull request from your fork; the maintainer merges
+only after the required CI checks and signing requirements are satisfied.
 
 ## License
 

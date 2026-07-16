@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Shared anti-leak gate (S0), used by all three layers of defense:
   - local pre-commit / commit-msg hooks (on the staged diff / commit message)
-  - engine-push (locally, on every commit in the range about to be published,
-    plus their messages)
+  - local maintainer checks (when used outside this repository, on every
+    commit in the range about to be published, plus their messages)
   - this repo's CI (on every commit in a push or pull request)
 
 Two pattern sources, NEVER mixed:
