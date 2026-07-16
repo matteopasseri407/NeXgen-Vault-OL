@@ -1,6 +1,6 @@
 # Contributing
 
-This is a solo-maintainer, Alpha-stage project. Contributions are welcome,
+This is a solo-maintainer, Beta-stage project. Contributions are welcome,
 but set expectations accordingly: review can take a while, and not every PR
 fits the project's scope (see "Design boundaries" and "Scope and
 limitations" in `README.md`) even when it's well built.

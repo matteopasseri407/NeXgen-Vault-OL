@@ -1,6 +1,6 @@
 # Credits
 
-Agent-OS (NeXgen Engine) builds on the work of others. This file lists the
+NeXgen Engine builds on the work of others. This file lists the
 third-party components and their authors. Each component keeps its own upstream
 license; this file gives credit and points to the source.
 
@@ -45,5 +45,5 @@ license; this file gives credit and points to the source.
 ## Thanks
 
 This project stands on the shoulders of the open-source and source-available
-community above. If you extend Agent-OS with a new component, add it to this
+community above. If you extend NeXgen Engine with a new component, add it to this
 file so credit stays accurate.

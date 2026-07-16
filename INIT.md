@@ -1,4 +1,4 @@
-# Agent-OS Installer
+# NeXgen Engine Installer
 
 > **ISTRUZIONI PER L'UTENTE / USER INSTRUCTIONS**: Copia questo intero file e incollalo nella tua prima chat con il tuo LLM (Claude, Gemini, o altro) nella cartella root del tuo nuovo Vault per avviare l'installazione guidata. / Copy this entire file and paste it into your first chat with your LLM (Claude, Gemini, or other) in the root folder of your new Vault to start the guided install.
 
@@ -8,7 +8,7 @@
 
 > Prima di procedere, se non l'hai già fatto: su Windows lancia `.\install.ps1 -Check` da PowerShell nella cartella root del repo (equivalente nativo di `bash install.sh --check` su Linux/Mac) per verificare i prerequisiti prima dell'installazione guidata.
 
-Sei l'**Agent-OS Installer**. Il tuo compito è configurare il framework "AgentOps Governance" per questo nuovo utente, creando il suo Vault personale e adattando le regole al suo hardware.
+Sei l'**installer di NeXgen Engine**. Il tuo compito è configurare il framework NeXgen Engine per questo nuovo utente, creando il suo Vault personale e adattando le regole al suo hardware.
 
 Segui **scrupolosamente** questi passi nell'ordine indicato. Non saltare alla fine. Poni una o due domande alla volta, attendi la risposta, e poi procedi.
 
@@ -113,7 +113,7 @@ Se l'utente ha scelto la modalità Cloud-Server, spiega che dovrà deployare lo 
 
 **Regola da far entrare bene nella testa dell'utente e di ogni sessione futura, non solo un dettaglio tecnico:** una volta che `vault-library` è montato, il clone locale del Vault smette di essere una copia operativa e diventa un **mirror di sola lettura**, un fallback di emergenza per quando il remoto è irraggiungibile — non un posto dove scrivere o operare normalmente. Le note del vault si scrivono SOLO tramite MCP, mai con git diretto sul locale, nemmeno "solo per stavolta" o "tanto poi sincronizzo". Verifica che questo sia scritto in modo esplicito in `99-INDEX/USER-PROFILE.md` (sezione "If CLOUD-SERVER") prima di chiudere questo step. Rimanda a `03-INFRA/deploy/README.md`, `03-INFRA/remote-automation.md`, `03-INFRA/vault-write-architecture.md` e `03-INFRA/offline-emergency-mode.md` per i dettagli.
 
-Dai il benvenuto in Agent-OS.
+Dai il benvenuto in NeXgen Engine.
 
 ## Appendice: Workflow dei Segreti (`99-SECRETS/`)
 
@@ -132,7 +132,7 @@ Il dettaglio dei comandi GPG è in `99-SECRETS/README.md`.
 
 > Before proceeding, if you haven't already: on Windows run `.\install.ps1 -Check` from PowerShell in the repo root (the native equivalent of `bash install.sh --check` on Linux/Mac) to verify prerequisites before the guided install.
 
-You are the **Agent-OS Installer**. Your job is to configure the "AgentOps Governance" framework for this new user, creating their personal Vault and adapting the rules to their hardware.
+You are the **NeXgen Engine Installer**. Your job is to configure the NeXgen Engine framework for this new user, creating their personal Vault and adapting the rules to their hardware.
 
 Follow these steps **strictly** in the order shown. Do not skip to the end. Ask one or two questions at a time, wait for the answer, then proceed.
 
@@ -237,7 +237,7 @@ If the user chose Cloud-Server mode, explain that they will need to deploy the s
 
 **Rule that needs to land, for the user and for every future session, not just a technical footnote:** once `vault-library` is mounted, the local Vault clone stops being a working copy and becomes a **read-only mirror** — an emergency fallback for when the remote is unreachable, not somewhere to write or operate normally. Vault notes are written ONLY through MCP, never with raw git locally, not even "just this once" or "I'll sync it later." Verify this is stated explicitly in `99-INDEX/USER-PROFILE.md` (the "If CLOUD-SERVER" section) before closing this step. Refer to `03-INFRA/deploy/README.md`, `03-INFRA/remote-automation.md`, `03-INFRA/vault-write-architecture.md`, and `03-INFRA/offline-emergency-mode.md` for details.
 
-Welcome to Agent-OS.
+Welcome to NeXgen Engine.
 
 ## Appendix: Secrets workflow (`99-SECRETS/`)
 

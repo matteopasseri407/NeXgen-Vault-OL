@@ -1,7 +1,7 @@
 # AI-UNINSTALL.md — Autonomous Removal Mode
 
 You are an AI agent with shell and file access, asked to remove NeXgen
-Vault (Agent-OS) for this user. This is the autonomous companion to
+Vault for this user. This is the autonomous companion to
 `docs/uninstall.md`: same removal, you run the commands instead of the
 user typing each one by hand.
 

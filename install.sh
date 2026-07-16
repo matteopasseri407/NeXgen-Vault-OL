@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NeXgen Engine (Agent-OS) — bootstrap / preflight
+# NeXgen Engine — bootstrap / preflight
 # ---------------------------------------------------------------------------
 # Deterministic first-run helper. It does NOT replace the AI-guided installer
 # (INIT.md): it does the mechanical part — check prerequisites, verify the
@@ -31,9 +31,9 @@ MISS_REQ=0
 banner(){
   printf '%s\n' "$B$CYN"
   printf '  ┌───────────────────────────────────────────────┐\n'
-  printf '  │   NeXgen Engine (Agent-OS)  ·  bootstrap        │\n'
+  printf '  │   NeXgen Engine  ·  bootstrap                 │\n'
   printf '  └───────────────────────────────────────────────┘%s\n' "$R"
-  printf '  %sAgentOps governance for AI agents — Git-backed vault.%s\n' "$DIM" "$R"
+  printf '  %sOne Git-backed vault for AI-tool config and memory.%s\n' "$DIM" "$R"
 }
 
 # ---- OS detection ----------------------------------------------------------
@@ -84,7 +84,7 @@ check_prereqs(){
 }
 
 windows_note(){
-  [ "$OS" = windows ] && printf '\n  %sWindows: physically verified, still Alpha. This bash script still runs\n  here (Git Bash / WSL), but the native entry point is PowerShell: run\n  .\\install.ps1 -Check from PowerShell instead. The provisioner, MCP\n  renderer, PowerShell command shims, doctor, and Antigravity consumer path\n  have been exercised on real Windows hardware and in CI. What is still\n  missing is an unassisted cold install, so MINIMAL remains the safer\n  starting profile on Windows today.%s\n' "$YEL" "$R"
+  [ "$OS" = windows ] && printf '\n  %sWindows: physically verified, still Beta. This bash script still runs\n  here (Git Bash / WSL), but the native entry point is PowerShell: run\n  .\\install.ps1 -Check from PowerShell instead. The provisioner, MCP\n  renderer, PowerShell command shims, doctor, and Antigravity consumer path\n  have been exercised on real Windows hardware and in CI. What is still\n  missing is an unassisted cold install, so MINIMAL remains the safer\n  starting profile on Windows today.%s\n' "$YEL" "$R"
 }
 
 check_scaffold(){

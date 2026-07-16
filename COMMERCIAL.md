@@ -1,6 +1,6 @@
 # Commercial licensing
 
-Agent-OS (NeXgen Engine) is licensed under the PolyForm Noncommercial License 1.0.0. See `LICENSE` for the full text; this file only explains what that means in practice and when you'd want something different.
+NeXgen Engine is licensed under the PolyForm Noncommercial License 1.0.0. See `LICENSE` for the full text; this file only explains what that means in practice and when you'd want something different.
 
 Required Notice: Copyright Matteo Passeri (https://github.com/matteopasseri407/NeXgen-Engine)
 

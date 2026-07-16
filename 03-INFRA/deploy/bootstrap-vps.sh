@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap VPS — deploy the Agent-OS self-hosted stack.
+# Bootstrap VPS — deploy the NeXgen Engine self-hosted stack.
 #
 # Run ON the VPS, from the repo root (after cloning NeXgen-Engine):
 #   cd NeXgen-Engine/03-INFRA/deploy

@@ -1,7 +1,7 @@
 # AI-INSTALLER.md — Autonomous Setup Mode
 
 You are an AI agent with shell and file-write access, asked to set up NeXgen
-Vault (Agent-OS) for a new user in this folder. This is the **fast,
+Vault for a new user in this folder. This is the **fast,
 autonomous companion to `INIT.md`**: same install, minimal back-and-forth —
 you do the work instead of walking the user through it one question at a
 time. If the user would rather be guided through a slower interview

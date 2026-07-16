@@ -29,8 +29,8 @@ function have($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 
 function Show-Banner {
   Write-Host ""
-  Write-Host "=== NeXgen Engine (Agent-OS) - bootstrap ===" -ForegroundColor Cyan
-  dim "  AgentOps governance for AI agents -- Git-backed vault."
+  Write-Host "=== NeXgen Engine - bootstrap ===" -ForegroundColor Cyan
+  dim "  One Git-backed vault for AI-tool config and memory."
 }
 
 # Resolve the Python 3 interpreter: 'python3' first (WSL/Chocolatey installs,

@@ -16,6 +16,22 @@ of any engine release.
   Public release enforcement belongs in GitHub pull-request controls, CI, and
   signed releases, while private tooling remains outside the repository.
 
+## [0.6.0] - 2026-07-16
+
+The project moves from Alpha to Beta: it runs in real use with known limits, and stability is not yet guaranteed.
+
+### Changed
+
+- Maturity label is now **Beta** across the README, `install.sh`, `install.ps1`, `CONTRIBUTING.md`, and `docs/council.md`; `VERSION` is bumped to `0.6.0`.
+- The unassisted Windows cold install is reclassified from a Beta gate to a GA/1.0 onboarding gate. Rationale: a cold install by an unrelated first-time user tests first-install UX, a General Availability concern; Beta does not promise a polished unattended first install. The earlier entries below that call it "required for Beta" describe the release-gating policy at the time of those releases and are left unchanged.
+- Removed the legacy "Agent-OS" product name and the "AgentOps governance" phrasing from first-run banners and onboarding files (`install.sh`, `install.ps1`, `INIT.md`, `AI-INSTALLER.md`, `AI-UNINSTALL.md`, `COMMERCIAL.md`, `CREDITS.md`), for consistent NeXgen Engine naming.
+
+### Known limitations
+
+- The unassisted Windows cold install (no maintainer present to diagnose failures) has not been run.
+- Council `claude` and `ollama` seats are not yet verified live end to end; `agy` is refused as a passive seat (see `docs/council.md`).
+- The 2026-07-15 Windows P1 fixes ship in code and are green in `windows-latest` CI, but the doctor-launcher and publish paths have not been re-verified on the physical Windows where the issues were originally found; `windows-latest` CI does not reproduce that condition.
+
 ## [0.5.6] - 2026-07-16
 
 Windows command-launcher follow-up. This release remains Alpha.

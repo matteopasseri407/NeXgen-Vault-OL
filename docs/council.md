@@ -284,7 +284,7 @@ council clean --all           # removes every kept session now
   launcher. They use fake seats, so they do not replace live checks of
   each vendor CLI.
 - The Windows launcher has a portable regression test, but still needs a
-  physical Windows run before this Alpha feature can be called cross-platform.
+  physical Windows run before this Beta feature can be called cross-platform.
 - Large prompts use stdin for Codex, and a protected temporary attachment
   for OpenCode. Claude and Ollama use protected stdin. (Antigravity's
   transport plumbing also uses stdin and remains covered by tests, but the

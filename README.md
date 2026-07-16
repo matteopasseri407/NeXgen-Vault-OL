@@ -1,10 +1,12 @@
-# NeXgen Engine (Alpha)
+# NeXgen Engine (Beta)
 
 [![CI](https://github.com/matteopasseri407/NeXgen-Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/matteopasseri407/NeXgen-Engine/actions/workflows/ci.yml)
 [![Latest version](https://img.shields.io/github/v/release/matteopasseri407/NeXgen-Engine?display_name=tag&label=latest%20version)](https://github.com/matteopasseri407/NeXgen-Engine/releases/latest)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
 
-NeXgen Engine is a Git-based framework for managing shared instructions, tool configuration, and version-controlled working memory across AI tools such as Claude Code. It supports software projects as well as notes, research, and professional documents. The project is currently in Alpha, with `v0.5.6` as the latest release.
+**Configure Claude Code, Codex, OpenCode, and Antigravity from one Git repo you can diff and revert.**
+
+NeXgen Engine is a Git-based framework for managing shared instructions, tool configuration, and version-controlled working memory across AI tools such as Claude Code. It supports software projects as well as notes, research, and professional documents. The project is currently in Beta, with `v0.6.0` as the latest release.
 
 Instructions, generated tool configuration, configuration checks, secrets guidance, and shared memory are stored as plain files in a Git repository rather than in a hosted service.
 
@@ -50,7 +52,7 @@ It does not intercept tool calls at runtime.
 - **Configuration as code for AI tools.** Manifest files define tools, permissions, and behavior. The Python script `agent_sync.py` generates the configuration required by each supported CLI.
 - **Version-controlled memory.** The agents read and write Markdown files. Every change is stored in Git, can be reviewed with a diff, and can be reverted.
 - **Vault grooming, optional and manual.** `vault-groom.sh` and `vault-groom.ps1` use an LLM and a grooming playbook to flag stale, duplicate, or disconnected notes. A normal run and `preview` are read-only. `apply` shows the proposed changes and requires an explicit `yes` before writing in a disposable clone with no remote. An audit compares the result with the approved changes before promotion. If the audit fails, the original vault is left untouched. An optional n8n workflow sends a reminder every 14 days, but it never runs grooming unattended.
-- **AI Council, Alpha.** The local orchestrator `council.py` coordinates multiple models for brainstorming and relay tasks. The routing logic is implemented in Python, with explicit human selection of seats and models.
+- **AI Council, Beta.** The local orchestrator `council.py` coordinates multiple models for brainstorming and relay tasks. The routing logic is implemented in Python, with explicit human selection of seats and models.
 - **Configuration checks.** In MULTI profile, `agent-doctor` runs more than 30 read-only checks against the live configuration, vault wiring, skills, and secrets handling. It reports `pass`, `warn`, or `fail` for each check and returns a non-zero exit code when it finds an error. In MINIMAL, a single tool on a single machine is checked directly and no doctor is installed.
 - **Cross-platform synchronization, optional.** In MULTI profile, the provisioner keeps generated files aligned across different machines, such as a Windows workstation and a Linux laptop. In MINIMAL, the provisioner is not installed.
 
@@ -76,7 +78,7 @@ The tools reach them through the Model Context Protocol (MCP).
 
 > **Note:** These services are examples, not fixed dependencies. They were selected because they can run on an **Oracle Cloud Always Free VPS** with 4 ARM Ampere cores, 24 GB of RAM, and 200 GB of SSD storage. You can replace them with other services.
 
-- **Semantic search, configured separately.** The `vault-library` MCP contract exposes `semantic_search`, and the repository includes the manifest and retrieval rules for using it. The search backend and its deployment code are not included in this repository, but [`03-INFRA/deploy/semantic-search-recipe.md`](03-INFRA/deploy/semantic-search-recipe.md) is a complete build specification — embedding model, hybrid ranking algorithm, weights, reranker, resource footprint — precise enough for an AI coding agent to build a compatible backend from scratch. Without a compatible backend, tools fall back to lexical search.
+- **Semantic search, configured separately.** The `vault-library` MCP contract exposes `semantic_search`, and the repository includes the manifest and retrieval rules for using it. The search backend and its deployment code are not included in this repository, but [`03-INFRA/deploy/semantic-search-recipe.md`](03-INFRA/deploy/semantic-search-recipe.md) is a complete build specification (embedding model, hybrid ranking algorithm, weights, reranker, resource footprint) precise enough for an AI coding agent to build a compatible backend from scratch. Without a compatible backend, tools fall back to lexical search.
 - **Web scraping.** You can deploy a Firecrawl instance using the files in `03-INFRA/deploy/firecrawl/`. It is the default read-only path for web content.
 - **Local OCR.** You can deploy an OCR service using the files in `03-INFRA/deploy/ocr/` to extract text from screenshots, logs, and scanned documents locally.
 - **Visible browser.** For forms, logins, and other interactive tasks, tools attach to a real Chrome window through the DevTools protocol. They must not use a headless browser for interactive work.
@@ -86,6 +88,14 @@ The tools reach them through the Model Context Protocol (MCP).
 NeXgen uses Markdown, Git, and a small MCP server for durable memory that both people and tools can read.
 It does not include a proprietary memory database, an autonomous multi-tool planner, a CRDT layer, or a second database.
 The project focuses on configuration, versioned memory, and safety checks above the storage layer.
+
+## Where this fits
+
+If you mainly need to fan one set of rules and MCP config out to many tools, [ruler](https://github.com/intellectronica/ruler) and [rulesync](https://github.com/dyoshikawa/rulesync) are more mature and render to roughly 30 targets, including the four CLIs NeXgen supports. Start there if config fan-out is all you want. If you want Markdown memory an agent can read and write, [Cline's Memory Bank](https://github.com/cline/cline) convention and [basic-memory](https://github.com/basicmachines-co/basic-memory) popularized that idea and are further along.
+
+NeXgen Engine sits where those two ideas meet, and adds one thing on the memory side. It renders MCP config per CLI *and* keeps working memory as plain Markdown in Git, where every write is a compare-and-swap: the memory server rejects a replace unless the caller's SHA-256 hash matches the current file, and each accepted write lands as its own Git commit. That vault, the per-tool config, and a single AGENTS.md are carried between machines by a fail-closed sync, with a doctor that reports drift between the canonical source and the generated files.
+
+It is a solo project under a noncommercial license, Linux stable and Windows in beta. It does not claim to be first at any of these pieces: the reason to look is the specific combination, and the write discipline on the memory.
 
 ## What's inside
 
@@ -146,9 +156,9 @@ If you prefer fewer setup questions, use `AI-INSTALLER.md` instead of `INIT.md`.
 
 **Linux: released.** Linux is the most extensively tested platform in this version. The provisioner, doctor, grooming, council, and synchronization tools have been exercised end to end on Fedora and pass CI. macOS uses the same POSIX code paths but has seen less real-world use.
 
-**Why is this still Alpha?** Cross-platform support and the core orchestrators are still settling:
-- **Windows: physically verified, not yet a cold install.** The provisioner (`agent_sync.py`), MCP renderer (`render.py`), PowerShell command shims, doctor, and Antigravity consumer path have run on real Windows hardware, in addition to the full `windows-latest` CI suite. The first guided install surfaced two real gaps (`vault-mcp` not bundled, Firecrawl not installable), both fixed and covered by `vault-mcp-smoke` since 0.5.0. Existing-install realignment has also been exercised repeatedly. What's still missing is an unassisted cold install, without the maintainer present to diagnose failures, which is the closer analog to a stranger's first experience. Until that happens, MINIMAL remains the more cautious starting point on Windows.
-- **AI Council:** The deterministic orchestrator (`council.py`) supports `opencode`, `codex`, `claude`, and `ollama` seats; `agy` (Antigravity) is a recognized `cli` value but is currently refused as a passive seat — a live relay run (2026-07-15) found it ignores both the model selection and the given prompt, reading real local files instead of answering. Using `agy` interactively to call into Council itself is unaffected. See `docs/council.md`'s "Current limitations" for the finding and the conditions to re-enable it. Its optional routing adapter proposes exact locally verified models and efforts, with declared fallbacks, without letting an external workflow rewrite private cross-machine data or auto-invoke a seat. A human explicitly chooses the seat count and models.
+**Known limitations.** Cross-platform support and the core orchestrators are still settling:
+- **Windows: physically verified, not yet a cold install.** The provisioner (`agent_sync.py`), MCP renderer (`render.py`), PowerShell command shims, doctor, and Antigravity consumer path have run on real Windows hardware, in addition to the full `windows-latest` CI suite. The first guided install surfaced two real gaps (`vault-mcp` not bundled, Firecrawl not installable), both fixed and covered by `vault-mcp-smoke` since 0.5.0. Existing-install realignment has also been exercised repeatedly. What's still missing is an unassisted cold install, without the maintainer present to diagnose failures, which is the closer analog to a stranger's first experience. This unassisted cold install is a GA/1.0 onboarding gate, not a blocker for Beta: it exercises first-install UX, a General Availability concern rather than a maturity signal for existing installs. Until that happens, MINIMAL remains the more cautious starting point on Windows.
+- **AI Council:** The deterministic orchestrator (`council.py`) supports `opencode`, `codex`, `claude`, and `ollama` seats; `agy` (Antigravity) is a recognized `cli` value but is currently refused as a passive seat: a live relay run (2026-07-15) found it ignores both the model selection and the given prompt, reading real local files instead of answering. Using `agy` interactively to call into Council itself is unaffected. See `docs/council.md`'s "Current limitations" for the finding and the conditions to re-enable it. Its optional routing adapter proposes exact locally verified models and efforts, with declared fallbacks, without letting an external workflow rewrite private cross-machine data or auto-invoke a seat. A human explicitly chooses the seat count and models.
 
 ## License
 
@@ -160,10 +170,12 @@ This project is free to use. Some optional links (like the OpenCode one above) a
 
 ---
 
-# NeXgen Engine, versione italiana, Alpha, v0.5.6
+# NeXgen Engine, versione italiana, Beta, v0.6.0
+
+**Configura Claude Code, Codex, OpenCode e Antigravity da un unico repo Git che puoi diffare e revertare.**
 
 NeXgen Engine è un framework basato su Git per gestire istruzioni condivise, configurazione dei tool e memoria di lavoro versionata tra più strumenti AI, come Claude Code.
-Il progetto è ancora in fase Alpha, con `v0.5.6` come release più recente.
+Il progetto è ora in fase Beta, con `v0.6.0` come release più recente.
 Può essere usato per progetti software, note, ricerca e documenti professionali.
 
 Le istruzioni, la configurazione generata dei tool, i controlli sulle differenze, le regole per i segreti e la memoria condivisa sono file di testo dentro un repository Git, non dati conservati in un servizio ospitato.
@@ -224,7 +236,7 @@ I controlli a runtime spettano all'harness della CLI, con i suoi permessi e le r
   Se qualcosa non torna, il clone resta in quarantena e il vault originale non viene toccato.
   Puoi usare la CLI che hai già tra `claude`, `codex` e `agy`, tramite `GROOM_RUNNER`.
   Un workflow n8n opzionale ti ricorda ogni 14 giorni di eseguire il grooming, ma non avvia mai il lavoro al posto tuo.
-- **Consiglio AI deterministico, in Alpha.** `council.py` è un orchestratore locale per coordinare più modelli in attività di brainstorming o relay.
+- **Consiglio AI deterministico, in Beta.** `council.py` è un orchestratore locale per coordinare più modelli in attività di brainstorming o relay.
   Le regole di passaggio sono scritte in Python, non affidate a un altro LLM.
 - **Controllo delle differenze.** Nel profilo MULTI, `agent-doctor` esegue oltre 30 verifiche in sola lettura sulla configurazione delle CLI, sul collegamento al vault, sulle skill e sulla gestione dei segreti.
   Per ogni voce mostra `pass`, `warn` o `fail` e restituisce un exit code diverso da zero se trova errori.
@@ -260,7 +272,7 @@ Gli agenti li raggiungono tramite il Model Context Protocol, MCP.
 
 - **Ricerca semantica, da configurare a parte.** Il contratto MCP `vault-library` espone già `semantic_search`, il manifest `manifest.yaml` lo dichiara e la governance di retrieval in `AGENTS.md` sa come usarlo.
   Il repository, però, non contiene il backend di ricerca né il suo codice di deploy: in `03-INFRA/deploy/` non c'è una cartella `semantic-search/` con un compose funzionante.
-  C'è però [`03-INFRA/deploy/semantic-search-recipe.md`](03-INFRA/deploy/semantic-search-recipe.md): una ricetta di build completa — modello di embedding, algoritmo di ranking ibrido, pesi, reranker, ingombro di risorse — precisa abbastanza perché un agente AI possa costruire da zero un backend compatibile.
+  C'è però [`03-INFRA/deploy/semantic-search-recipe.md`](03-INFRA/deploy/semantic-search-recipe.md): una ricetta di build completa (modello di embedding, algoritmo di ranking ibrido, pesi, reranker, ingombro di risorse) precisa abbastanza perché un agente AI possa costruire da zero un backend compatibile.
   Se vuoi usare questa funzione, devi costruire e gestire un servizio compatibile con quel contratto.
   In sua assenza, gli agenti ricadono sulla ricerca lessicale prevista dalla governance.
 - **Web scraping.** Puoi installare un'istanza di Firecrawl usando i file di deploy in `03-INFRA/deploy/firecrawl/`.
@@ -274,6 +286,14 @@ Gli agenti li raggiungono tramite il Model Context Protocol, MCP.
 NeXgen usa Markdown, Git e un piccolo server MCP per una memoria durevole che persone e strumenti possono leggere.
 Non include un database di memoria proprietario, un pianificatore autonomo multi-tool, un livello CRDT o un secondo database.
 Il progetto si concentra sulla configurazione, sulla memoria versionata e sui controlli di sicurezza sopra lo storage.
+
+## Come si colloca
+
+Se ti serve soprattutto distribuire un set di regole e config MCP a molti strumenti, [ruler](https://github.com/intellectronica/ruler) e [rulesync](https://github.com/dyoshikawa/rulesync) sono più maturi e generano per una trentina di target, incluse le quattro CLI che NeXgen supporta. Parti da lì se ti basta il fan-out della configurazione. Se vuoi una memoria Markdown che un agente legge e scrive, la convenzione [Memory Bank di Cline](https://github.com/cline/cline) e [basic-memory](https://github.com/basicmachines-co/basic-memory) hanno reso popolare l'idea e sono più avanti.
+
+NeXgen Engine sta dove queste due idee si incontrano, e aggiunge una cosa sul lato memoria. Genera la config MCP per ogni CLI *e* tiene la memoria di lavoro come Markdown puro in Git, dove ogni scrittura è un compare-and-swap: il server di memoria rifiuta un replace se l'hash SHA-256 di chi scrive non combacia col file attuale, e ogni scrittura accettata diventa un suo commit Git. Quel vault, la config per-strumento e un unico AGENTS.md vengono portati tra le macchine da un sync che fallisce chiuso, con un doctor che segnala il drift tra la sorgente canonica e i file generati.
+
+È un progetto solo-maintainer con licenza noncommerciale, Linux stabile e Windows in beta. Non pretende di essere il primo su nessuno di questi pezzi: il motivo per guardarlo è la combinazione specifica, e la disciplina di scrittura sulla memoria.
 
 ## Contenuto
 
@@ -351,16 +371,16 @@ La procedura segue gli stessi passaggi e chiede solo le informazioni indispensab
 In questa versione, provisioner, doctor, grooming, council e sync sono stati verificati end to end su Fedora e passano la CI.
 macOS segue gli stessi percorsi POSIX, ma ha ricevuto meno verifiche nell'uso reale.
 
-**Perché il progetto è ancora in Alpha?** Il supporto multipiattaforma e gli orchestratori principali non sono ancora considerati definitivi.
+**Limiti noti.** Il supporto multipiattaforma e gli orchestratori principali non sono ancora considerati definitivi.
 - **Windows: verificato due volte su hardware fisico, manca ancora un'installazione "a freddo".** `agent_sync.py`, il generatore della configurazione MCP `render.py`, tramite un blocco di override `windows:` per ogni server nel manifest, e i launcher PowerShell includono un dialetto Windows.
   La CI esegue l'intera suite pytest su `windows-latest`, compresi i test PowerShell del grooming, nel job `engine-tests-windows` a ogni push.
-  Oltre alla CI, il motore ha ormai girato per intero su hardware Windows reale: un'installazione guidata completa (profilo MULTI, tre CLI — Claude Code, Codex, Antigravity — più il deploy dello stack Cloud-Server su una VPS) su una macchina pulita, e il riallineamento di un'installazione esistente all'ultima release.
+  Oltre alla CI, il motore ha ormai girato per intero su hardware Windows reale: un'installazione guidata completa (profilo MULTI, tre CLI: Claude Code, Codex e Antigravity, più il deploy dello stack Cloud-Server su una VPS) su una macchina pulita, e il riallineamento di un'installazione esistente all'ultima release.
   La transazione bloccata di `agent-sync apply` (pull più propagazione) è girata per davvero su Windows in entrambi i casi, non solo in CI.
-  La prima installazione guidata ha fatto emergere due lacune reali (`vault-mcp` non incluso nel bundle, Firecrawl non installabile) — entrambe corrette e coperte dal job CI `vault-mcp-smoke` a partire dalla 0.5.0.
-  Quello che manca ancora: un'installazione lasciata correre senza che il manutentore intervenga sugli errori — il test più vicino a come la vivrebbe davvero un utente nuovo.
-  I percorsi del provisioner, degli shim PowerShell, del doctor e del consumer Antigravity sono stati verificati direttamente su Windows; manca ancora il collaudo a freddo senza assistenza del manutentore.
+  La prima installazione guidata ha fatto emergere due lacune reali (`vault-mcp` non incluso nel bundle, Firecrawl non installabile), entrambe corrette e coperte dal job CI `vault-mcp-smoke` a partire dalla 0.5.0.
+  Quello che manca ancora: un'installazione lasciata correre senza che il manutentore intervenga sugli errori, il test più vicino a come la vivrebbe davvero un utente nuovo.
+  I percorsi del provisioner, degli shim PowerShell, del doctor e del consumer Antigravity sono stati verificati direttamente su Windows; manca ancora il collaudo a freddo senza assistenza del manutentore. Questa installazione a freddo non assistita è un gate di onboarding per la GA/1.0, non un blocco per la Beta: verifica la UX di prima installazione, una questione da General Availability più che un segnale di maturità per le installazioni esistenti.
   Finché non arriva un'installazione a freddo, MINIMAL resta il punto di partenza più prudente su Windows.
-- **Consiglio AI.** L'orchestratore deterministico `council.py` supporta i seat `opencode`, `codex`, `claude` e `ollama`; `agy` (Antigravity) è un valore `cli` riconosciuto ma oggi rifiutato come seat passivo — una relay dal vivo (2026-07-15) ha trovato che ignora sia la selezione del modello sia il prompt dato, leggendo file locali reali invece di rispondere. Usare `agy` in modo interattivo per invocare il Council non è toccato da questo. Dettagli e condizioni per riabilitarlo in `docs/council.md`, sezione "Current limitations".
+- **Consiglio AI.** L'orchestratore deterministico `council.py` supporta i seat `opencode`, `codex`, `claude` e `ollama`; `agy` (Antigravity) è un valore `cli` riconosciuto ma oggi rifiutato come seat passivo: una relay dal vivo (2026-07-15) ha trovato che ignora sia la selezione del modello sia il prompt dato, leggendo file locali reali invece di rispondere. Usare `agy` in modo interattivo per invocare il Council non è toccato da questo. Dettagli e condizioni per riabilitarlo in `docs/council.md`, sezione "Current limitations".
   Il routing opzionale propone modelli ed effort verificati localmente, con fallback espliciti.
   Non permette a un workflow esterno di riscrivere dati privati tra più macchine o di avviare automaticamente un seat.
   La scelta del numero di seat e dei modelli resta sempre esplicita e umana.
