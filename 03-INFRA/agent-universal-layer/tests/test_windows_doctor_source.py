@@ -23,6 +23,8 @@ def test_windows_doctor_resolves_engine_owned_helpers_from_its_own_checkout():
     assert '$renderOut = python $RenderPy' in source
     assert source.count('$RenderPy = Join-Path $EngineInfra') == 1
     assert 'Join-Path $Vault "03-INFRA\\scripts\\skills-sync.py"' not in source
+    assert '[IO.File]::ReadAllText($AgGlobal)' in source
+    assert '(Get-Item -LiteralPath $AgGlobal).Length' not in source
 
 
 def test_windows_doctor_surfaces_path_limit_and_legacy_skill_migration():

@@ -22,7 +22,7 @@ One single place decides whether something is broken, one single place tells the
 
 1. resolve `sync/remotes.yaml` and acquire the host-wide lock
 2. fetch the authoritative remote and classify the local state
-3. only for a fresh or local-only state, apply MCP config (`render.py`, additive) + skills (`skills-sync.py`)
+3. only for a fresh or local-only state, render MCP config, propagate the rendered Antigravity source, then reconcile skills. MCP is additive except for exact, user-authorized `retired_servers` tombstones
 4. aggregate required phase failures into the exit code
 5. `_send_healthcheck` queries `agent-doctor` and notifies ONLY on FAIL
 
@@ -33,7 +33,7 @@ One single place decides whether something is broken, one single place tells the
 | `agent-sync` (+ `.timer`) | clock | locked recurring run: prove authoritative freshness, apply config and skills, call the healthcheck. Never publishes. |
 | `agent-doctor` | brain | full alignment diagnosis; the only judge |
 | `agent_sync.py`'s `_send_healthcheck` | megaphone | notifies only on FAIL, with debounce and human-readable format; the only alert |
-| `render.py` | executor | generates MCP configs from the manifest (additive); computes drift |
+| `render.py` | executor | generates MCP configs from the manifest, preserves unknown entries by default, removes only explicit `retired_servers`, and computes drift |
 | `skills-sync.py` | executor | validates the skill manifest, materializes bodies in the non-discovered library, and exposes only declared core or Claude-native views. Codex progressive-discloses discovered bodies, while manual entries remain outside discovery to bound its initial metadata catalog. Legacy discovery folders move only through the explicit, reversible `--migrate-legacy` quarantine. Third-party GitHub sources require a full commit SHA, fetched and verified with noninteractive Git and a bounded timeout. |
 | `skill-check` | executor | advisory security check of a skill (SkillSpector) |
 | authoritative pull inside `agent_sync.py` | executor | typed freshness gate; unsafe Git states block apply instead of degrading to best effort |

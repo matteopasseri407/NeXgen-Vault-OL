@@ -22,6 +22,12 @@ Plain `bash install.sh` (the default, guided mode) is almost as quiet: the only 
 | OpenCode | `instructions` field in `opencode.json` | MCP section of the same `opencode.json` | `agent-skill find|show`, backed by `~/.agents/skill-library/` |
 | Antigravity | `~/.gemini/config/AGENTS.md` | `~/.gemini/antigravity/mcp_config.json` | `agent-skill find|show`, backed by `~/.agents/skill-library/` |
 
+MCP sections are additive by default. A server is removed from generated CLI
+configs only when its exact old name is deliberately added to the canonical
+manifest's `retired_servers` list. Authenticated Antigravity HTTP entries use
+the engine-owned `mcp-http-bridge.mjs`; generated JSON stores only the bearer
+environment-variable name, never its value.
+
 These are patches to files that must already exist (each CLI creates its own default config the first time you open it). Nothing here creates a CLI's config file from scratch; if a chosen CLI has never been opened, that step is skipped for it.
 
 ## MULTI profile only, additional writes by `agent-sync`

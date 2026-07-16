@@ -269,10 +269,22 @@ def _validate_mcp_server(
 
 def validate_mcp_manifest(data: Any, source: str | Path) -> dict[str, dict[str, Any]]:
     manifest = _mapping(data, source, "MCP manifest")
-    _reject_unknown_keys(manifest, {"schema_version", "servers"}, source, "MCP manifest")
+    _reject_unknown_keys(manifest, {"schema_version", "servers", "retired_servers"}, source, "MCP manifest")
     if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != MCP_SCHEMA_VERSION:
         _error(source, f"MCP manifest schema_version must be {MCP_SCHEMA_VERSION}")
     servers = _mapping(manifest.get("servers"), source, "MCP manifest.servers")
+    retired = _string_list(
+        manifest.get("retired_servers", []),
+        source,
+        "MCP manifest.retired_servers",
+    )
+    if len(set(retired)) != len(retired):
+        _error(source, "MCP manifest.retired_servers must not contain duplicates")
+    for name in retired:
+        if not ENTRY_NAME_RE.fullmatch(name):
+            _error(source, "every retired MCP server name must use letters, digits, '.', '_' or '-'")
+        if name in servers:
+            _error(source, f"MCP server '{name}' cannot be both active and retired")
     for name, server in servers.items():
         if not isinstance(name, str) or not ENTRY_NAME_RE.fullmatch(name):
             _error(source, "every MCP server name must use letters, digits, '.', '_' or '-'")
@@ -293,11 +305,25 @@ def validate_mcp_manifest(data: Any, source: str | Path) -> dict[str, dict[str, 
                 f"MCP servers '{previous}' and '{name}' collide as Codex key '{key}'",
             )
         codex_keys[key] = name
+    for name in retired:
+        key = name.replace("-", "_").casefold()
+        active = codex_keys.get(key)
+        if active is not None:
+            _error(
+                source,
+                f"retired MCP server '{name}' collides with active Codex server '{active}' as key '{key}'",
+            )
     return servers
 
 
+def load_mcp_manifest_document(path: Path) -> tuple[dict[str, dict[str, Any]], tuple[str, ...]]:
+    data = _load_yaml_mapping(path, "MCP manifest")
+    servers = validate_mcp_manifest(data, path)
+    return servers, tuple(data.get("retired_servers", []))
+
+
 def load_mcp_manifest(path: Path) -> dict[str, dict[str, Any]]:
-    return validate_mcp_manifest(_load_yaml_mapping(path, "MCP manifest"), path)
+    return load_mcp_manifest_document(path)[0]
 
 
 def _sequence_candidates(value: Any, source: str | Path, where: str) -> list[str]:

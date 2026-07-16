@@ -9,9 +9,9 @@ dialect.
     with a surgical substitution (the rest of the file stays intact), in the
     file's own style. Makes a backup, validates, and AUTO-BLOCKS if a non-MCP
     section would end up modified.
-  - Servers OUTSIDE THE MANIFEST in the live file: never deleted. They are
-    KEPT as-is and flagged (additive rule: something new installed by an
-    agent is the new standard to register in the manifest and propagate).
+  - Servers OUTSIDE THE MANIFEST in the live file: kept as-is and flagged by
+    default (additive rule). An exact name listed under `retired_servers` is
+    the deliberate exception: every generated CLI removes that stale entry.
   - Exit codes for --write: 0 = written or already compliant, 2 = blocked by
     a safety guard (see the STOP message), 3 = the CLI's default config file
     does not exist yet (it has never been launched once) — nothing to patch
@@ -42,7 +42,7 @@ HERE = Path(__file__).parent
 SCRIPTS_DIR = HERE.parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
-from config_schema import ConfigValidationError, load_mcp_manifest  # noqa: E402
+from config_schema import ConfigValidationError, load_mcp_manifest_document  # noqa: E402
 
 # The manifest is DATA (the user's real server list, concrete values), never
 # something the engine repo should serve — read it from vault_data, not from
@@ -162,14 +162,17 @@ def toml_loads(text):
         sys.exit("render.py needs Python 3.11+ or tomli for TOML: pip install tomli")
     return tomllib.loads(text)
 
-def redact(obj, key=None):
+def redact(obj, key=None, sensitive=False):
+    protected = sensitive or bool(key and SECRET_KEY.search(str(key))) or str(key).casefold() in {
+        "env", "auth", "headers"
+    }
     if isinstance(obj, dict):
-        return {k: redact(v, k) for k, v in obj.items()}
+        return {k: redact(v, k, protected) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [redact(x, key) for x in obj]
+        return [redact(x, key, protected) for x in obj]
+    if protected:
+        return "<AUTH>"
     if isinstance(obj, str):
-        if key and SECRET_KEY.search(str(key)):
-            return "<AUTH>"
         if "${" in obj or "{env:" in obj:
             return "<AUTH>"
         if obj.lower().startswith("authorization:") or "bearer " in obj.lower():
@@ -177,6 +180,15 @@ def redact(obj, key=None):
         if LONGTOK.match(obj) and any(c.isdigit() for c in obj):
             return "<AUTH>"
     return obj
+
+
+def redact_for_log(obj):
+    """Preserve MCP structure for diagnostics without emitting live scalars."""
+    if isinstance(obj, dict):
+        return {key: redact_for_log(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [redact_for_log(value) for value in obj]
+    return "<REDACTED>"
 
 # ---- per-dialect rendering (REAL values: env-ref where needed) ------------------
 
@@ -202,11 +214,16 @@ def r_codex(name, s):
 def r_antigravity(name, s):
     if s["transport"] == "stdio":
         return {"command": s["command"], "args": s.get("args", []), "env": s.get("env", {})}
-    hdr = f"Authorization: Bearer ${{{s['auth']['env']}}}"
-    command = _resolve_windows_command("npx") if IS_WINDOWS else "npx"
+    # Antigravity's Windows launcher mangles spaces inside stdio args before
+    # mcp-remote can expand an inherited token reference. The engine-owned
+    # bridge derives a no-space header from the named environment variable at
+    # runtime, so no credential is materialized in the generated JSON.
+    command = _resolve_windows_command("node") if IS_WINDOWS else "node"
     env = {"PATH": _windows_node_path(command)} if IS_WINDOWS else {}
     return {"command": command,
-            "args": ["-y", MCP_REMOTE_PACKAGE, s["url"], "--header", hdr], "env": env}
+            "args": [str(ENGINE_ROOT / "agent-universal-layer" / "mcp" / "mcp-http-bridge.mjs"),
+                     s["url"], s["auth"]["env"], MCP_REMOTE_PACKAGE],
+            "env": env}
 
 def r_opencode(name, s):
     if s["transport"] == "stdio":
@@ -265,12 +282,20 @@ def _required_ok(s):
         return True
     return _env_present(req)
 
+class ManifestView(dict):
+    """Filtered active servers plus explicit cross-CLI retirement names."""
+
+    def __init__(self, *args, retired=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.retired = tuple(retired)
+
+
 def load_manifest(quiet=False):
     """quiet=True suppresses the '>>> skip [...]' chatter -- used by
     --expected-servers, whose output must be machine-consumable (names
     only, one per line), never mixed with human-readable status lines."""
-    raw = load_mcp_manifest(MANIFEST)
-    out = {}
+    raw, retired = load_mcp_manifest_document(MANIFEST)
+    out = ManifestView(retired=retired)
     for n, s in raw.items():
         s = os_view(s)
         if not _required_ok(s):
@@ -288,15 +313,23 @@ def _load_manifest_or_stop(quiet=False):
         print(f">>> STOP: invalid MCP manifest ({exc}). Fix the data source before retrying.", file=sys.stderr)
         return None
 
-def keep_extras(gen, live, label):
+def _retired_keys(manifest, cli):
+    return {CLI[cli]["name"](name) for name in getattr(manifest, "retired", ())}
+
+
+def keep_extras(gen, live, label, retired=()):
     """A server in the live file but NOT in the manifest is not drift to be
     deleted: it's something new installed by an agent (vault rule: 'it's not
     drift, it's the new standard everyone should get'). It is KEPT as-is and
     flagged until it gets registered in the manifest. Codex already does this
     by design (per-section patch); here the JSON writers get aligned to it."""
     out = dict(gen)
+    retired = set(retired)
     for k in live:
         if k not in out:
+            if k in retired:
+                print(f">>> RETIRED [{label}]: server '{k}' REMOVED by explicit manifest tombstone.")
+                continue
             out[k] = live[k]
             print(f">>> OUTSIDE THE MANIFEST [{label}]: server '{k}' KEPT. Register it in manifest.yaml to propagate it everywhere.")
     return out
@@ -361,13 +394,13 @@ def diff_struct(path, cur, exp, out):
     if isinstance(exp, dict) and isinstance(cur, dict):
         for k in sorted(set(exp) | set(cur)):
             if k not in cur:
-                out.append(f"    - {path}{k}: MISSING in the live file (expected: {json.dumps(exp[k], ensure_ascii=False)})")
+                out.append(f"    - {path}{k}: MISSING in the live file (expected value redacted)")
             elif k not in exp:
-                out.append(f"    + {path}{k}: extra in the live file (value: {json.dumps(cur[k], ensure_ascii=False)})")
+                out.append(f"    + {path}{k}: extra in the live file (value redacted)")
             else:
                 diff_struct(f"{path}{k}.", cur[k], exp[k], out)
     elif cur != exp:
-        out.append(f"    ~ {path[:-1]}: live={json.dumps(cur, ensure_ascii=False)}  expected={json.dumps(exp, ensure_ascii=False)}")
+        out.append(f"    ~ {path[:-1]}: live and expected values differ (redacted)")
 
 
 def _codex_alias_collisions(names):
@@ -422,17 +455,22 @@ def cmd_diff():
             exp = spec["render"](name, s)
             if isinstance(current.get(key), dict) and isinstance(exp, dict):
                 exp = preserve_server_fields({key: exp}, {key: current[key]})[key]
-            exp = redact(exp)
             if key not in current:
                 print(f"  [MISSING]  {name} -> the live file has no '{key}'"); bad += 1; continue
             out = []
-            diff_struct("", redact(current[key]), exp, out)
+            diff_struct("", current[key], exp, out)
             if out:
                 print(f"  [DIFF]   {name}"); print("\n".join(out)); bad += 1
             else:
                 print(f"  [OK]     {name}"); ok += 1
+        retired = _retired_keys(man, cli)
         for k in sorted(set(current) - seen):
-            print(f"  [EXTRA]  '{k}' in the live file but not in the manifest (kept by --write: register it to propagate it)"); extra += 1
+            if k in retired:
+                print(f"  [RETIRED] '{k}' remains in the live file (removed by --write)")
+                bad += 1
+            else:
+                print(f"  [EXTRA]  '{k}' in the live file but not in the manifest (kept by --write: register it to propagate it)")
+                extra += 1
     summary = f"\n---- summary: {ok} servers match, {bad} with differences, {extra} outside the manifest"
     if stopped:
         summary += f", {stopped} CLI(s) STOPPED (corrupted live config, see above)"
@@ -617,16 +655,18 @@ def write_json_section(path, key, new_section, live_section, serialize, indent_e
         if k != key and new_parsed.get(k) != live[k]:
             print(f">>> STOP: the non-MCP section '{k}' would end up modified."); return 2
 
-    def _mask(line):   # never a plaintext token in ANY generator output
-        return re.sub(r'(Bearer )[^"\s]+', r'\1<MASK>', line)
-    d = list(difflib.unified_diff(raw.splitlines(), new_text.splitlines(),
-                                  f"{path.name} (live)", f"{path.name} (generated)", lineterm=""))
-    print("\n".join(_mask(l) for l in d) if d else "(no textual difference: already compliant)")
+    changed = new_text != raw
+    safe_live = json.dumps(redact_for_log(live_section), ensure_ascii=False, indent=2, sort_keys=True).splitlines()
+    safe_new = json.dumps(redact_for_log(new_section), ensure_ascii=False, indent=2, sort_keys=True).splitlines()
+    d = list(difflib.unified_diff(safe_live, safe_new,
+                                  f"{path.name} MCP (live, redacted)",
+                                  f"{path.name} MCP (generated, redacted)", lineterm=""))
+    print("\n".join(d) if d else "(redacted MCP structure unchanged: scalar values or formatting may still differ)")
     sem = []
     diff_struct("", live_section, new_section, sem)
     print("\nSEMANTIC differences in the MCP section (order-independent):")
-    print("\n".join(_mask(l) for l in sem) if sem else "    (none: already compliant with the manifest)")
-    if not d:
+    print("\n".join(sem) if sem else "    (none: already compliant with the manifest)")
+    if not changed:
         print("\n>>> Nothing to write."); return 0
 
     bak = _secure_backup(path, raw, "utf-8")
@@ -651,7 +691,7 @@ def write_opencode():
         return 2
     gen = {n: r_opencode(n, s) for n, s in man.items() if "opencode" in s["targets"]}
     gen = preserve_server_fields(gen, live.get("mcp", {}))
-    gen = keep_extras(gen, live.get("mcp", {}), "opencode")
+    gen = keep_extras(gen, live.get("mcp", {}), "opencode", _retired_keys(man, "opencode"))
     new_mcp = reorder(gen, live.get("mcp", {}))
     return write_json_section(path, "mcp", new_mcp, live.get("mcp", {}), s_inline)
 
@@ -678,7 +718,7 @@ def write_antigravity():
             d.setdefault(k, v)
         gen[n] = d
     gen = preserve_server_fields(gen, live_servers)
-    gen = keep_extras(gen, live_servers, "antigravity")
+    gen = keep_extras(gen, live_servers, "antigravity", _retired_keys(man, "antigravity"))
     new_servers = reorder(gen, live_servers)
     return write_json_section(path, "mcpServers", new_servers, live_servers, s_standard)
 
@@ -698,13 +738,55 @@ def _toml_scalar(v):
 def _codex_body(d):
     return [f"{k} = {_toml_scalar(v)}" for k, v in d.items()]
 
+def _toml_table_path(header):
+    """Return a semantic TOML table path, preserving dots inside quoted keys."""
+    try:
+        node = toml_loads(f"[{header}]\n")
+    except Exception:
+        return None
+    parts = []
+    while isinstance(node, dict):
+        if not node:
+            return tuple(parts)
+        if len(node) != 1:
+            return None
+        key = next(iter(node))
+        parts.append(key)
+        node = node[key]
+    return None
+
+
 def _section_headers(lines):
     out = {}
     for i, l in enumerate(lines):
         m = re.match(r'^\[(.+?)\]\s*$', l)
         if m:
-            out[m.group(1)] = i
+            path = _toml_table_path(m.group(1))
+            if path is not None:
+                out[path] = i
     return out
+
+
+def _without_toml_tables(lines, table_names):
+    """Drop exact TOML tables and their child tables, preserving all others."""
+    table_names = set(table_names)
+    if not table_names:
+        return lines[:]
+    out = []
+    skipping = False
+    for line in lines:
+        match = re.match(r'^\[(.+?)\]\s*$', line)
+        if match:
+            path = _toml_table_path(match.group(1))
+            skipping = bool(path and len(path) >= 2 and path[0] == "mcp_servers" and path[1] in table_names)
+        if not skipping:
+            out.append(line)
+    return out
+
+
+def _toml_key(name):
+    """Use a bare TOML key when safe; quote names containing dots."""
+    return name if re.fullmatch(r"[A-Za-z0-9_-]+", name) else json.dumps(name, ensure_ascii=False)
 
 def _content_range(lines, header_idx):
     """Content lines right after a section header: up to a blank line, the
@@ -729,6 +811,8 @@ def write_codex(path=None):
     man = _load_manifest_or_stop()
     if man is None:
         return 2
+    retired = _retired_keys(man, "codex")
+    lines = _without_toml_tables(lines, retired)
 
     targets = {}   # cname -> (direct_fields, env_or_None)
     for n, s in man.items():
@@ -741,18 +825,21 @@ def write_codex(path=None):
     headers = _section_headers(lines)
     # insertion point for NEW servers = end of the last mcp_servers.* block
     mcp_ends = [_content_range(lines, idx)[1] for h, idx in headers.items()
-                if h == "mcp_servers" or h.startswith("mcp_servers.")]
+                if h and h[0] == "mcp_servers"]
     insert_pos = max(mcp_ends) if mcp_ends else len(lines)
 
     edits = []        # (start, end, new_lines) — in-place patch of existing sections
     add_block = []    # lines for NEW servers to append to the mcp_servers block
     for cname, (direct, env) in targets.items():
-        if f"mcp_servers.{cname}" in headers:
-            s, e = _content_range(lines, headers[f"mcp_servers.{cname}"])
+        server_path = ("mcp_servers", cname)
+        env_path = ("mcp_servers", cname, "env")
+        table_name = f"mcp_servers.{_toml_key(cname)}"
+        if server_path in headers:
+            s, e = _content_range(lines, headers[server_path])
             direct_body = _codex_body(direct)
             if env is not None:
-                if f"mcp_servers.{cname}.env" in headers:
-                    s2, e2 = _content_range(lines, headers[f"mcp_servers.{cname}.env"])
+                if env_path in headers:
+                    s2, e2 = _content_range(lines, headers[env_path])
                     edits.append((s2, e2, _codex_body(env)))
                 else:
                     # Safe upgrade path: an older rendered stdio entry may
@@ -761,12 +848,12 @@ def write_codex(path=None):
                     # Append the child table as part of the same surgical
                     # replacement and let the parse/non-MCP guards below
                     # validate the complete result before writing.
-                    direct_body += ["", f"[mcp_servers.{cname}.env]", *_codex_body(env)]
+                    direct_body += ["", f"[{table_name}.env]", *_codex_body(env)]
             edits.append((s, e, direct_body))
         else:
-            add_block += ["", f"[mcp_servers.{cname}]"] + _codex_body(direct)
+            add_block += ["", f"[{table_name}]"] + _codex_body(direct)
             if env is not None:
-                add_block += ["", f"[mcp_servers.{cname}.env]"] + _codex_body(env)
+                add_block += ["", f"[{table_name}.env]"] + _codex_body(env)
     if add_block:
         edits.append((insert_pos, insert_pos, add_block))
 
@@ -793,14 +880,22 @@ def write_codex(path=None):
                 print(f">>> STOP: field {cname}.{kk} does not match the manifest."); return 2
         if env is not None and ns.get("env") != env:
             print(f">>> STOP: env of {cname} does not match."); return 2
+    for cname in retired:
+        if cname in np_.get("mcp_servers", {}):
+            print(f">>> STOP: retired server '{cname}' would remain in Codex.")
+            return 2
     for cname in live_srv:                          # no other MCP server touched
-        if cname not in targets and np_["mcp_servers"][cname] != live_srv[cname]:
+        if cname not in targets and cname not in retired and np_["mcp_servers"][cname] != live_srv[cname]:
             print(f">>> STOP: the non-manifest server '{cname}' would end up modified."); return 2
 
-    d = list(difflib.unified_diff(raw.splitlines(), new_text.splitlines(),
-                                  f"{path.name} (live)", f"{path.name} (generated)", lineterm=""))
-    print("\n".join(d) if d else "(no textual difference: Codex already compliant)")
-    if not d:
+    changed = new_text != raw
+    safe_live = json.dumps(redact_for_log(live_srv), ensure_ascii=False, indent=2, sort_keys=True).splitlines()
+    safe_new = json.dumps(redact_for_log(np_.get("mcp_servers", {})), ensure_ascii=False, indent=2, sort_keys=True).splitlines()
+    d = list(difflib.unified_diff(safe_live, safe_new,
+                                  f"{path.name} MCP (live, redacted)",
+                                  f"{path.name} MCP (generated, redacted)", lineterm=""))
+    print("\n".join(d) if d else "(redacted MCP structure unchanged: scalar values or formatting may still differ)")
+    if not changed:
         print("\n>>> Nothing to write."); return 0
 
     bak = _secure_backup(path, raw, "utf-8")
@@ -837,7 +932,7 @@ def write_claude(path=None):
         d = r_claude(n, s)   # http header already as ${VAR}: no literal token in .claude.json
         gen[n] = d
     gen = preserve_server_fields(gen, live_mcp)
-    gen = keep_extras(gen, live_mcp, "claude")
+    gen = keep_extras(gen, live_mcp, "claude", _retired_keys(man, "claude"))
     new_mcp = reorder(gen, live_mcp)
     return write_json_section(path, "mcpServers", new_mcp, live_mcp, s_standard, indent_exact="  ")
 

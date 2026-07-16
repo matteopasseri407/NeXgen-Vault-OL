@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 import re
 import shutil
@@ -16,6 +17,7 @@ REPO = Path(__file__).resolve().parents[3]
 MANIFEST = REPO / "03-INFRA" / "agent-universal-layer" / "mcp" / "manifest.yaml"
 RENDER = REPO / "03-INFRA" / "agent-universal-layer" / "mcp" / "render.py"
 PLAYWRIGHT_WRAPPER = REPO / "03-INFRA" / "agent-universal-layer" / "mcp" / "playwright-human-safe.mjs"
+HTTP_BRIDGE = REPO / "03-INFRA" / "agent-universal-layer" / "mcp" / "mcp-http-bridge.mjs"
 EXACT_NPM_PIN = re.compile(r"^(?:@[-a-z0-9_.]+/)?[-a-z0-9_.]+@\d+(?:\.\d+){2}$", re.I)
 NPM_COLD_START_TIMEOUT = 120
 
@@ -55,6 +57,43 @@ def test_antigravity_http_bridge_is_pinned():
         isinstance(node, ast.Name) and node.id == "MCP_REMOTE_PACKAGE"
         for node in ast.walk(bridge)
     ), "r_antigravity must render the pinned mcp-remote package"
+
+
+def test_antigravity_http_bridge_keeps_the_token_out_of_child_arguments(tmp_path):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed on this test host")
+    output = tmp_path / "spawn.json"
+    fake_npm = tmp_path / "fake-npm.mjs"
+    fake_npm.write_text(
+        "import fs from 'node:fs';\n"
+        "fs.writeFileSync(process.env.NEXGEN_TEST_OUTPUT, JSON.stringify({"
+        "argv: process.argv.slice(2), header: process.env.NEXGEN_MCP_AUTH_HEADER}));\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update({
+        "npm_execpath": str(fake_npm),
+        "nexgen_test_token": "fixture-secret-value",
+        "NEXGEN_TEST_OUTPUT": str(output),
+    })
+
+    result = subprocess.run(
+        [
+            node, str(HTTP_BRIDGE), "https://example.invalid/mcp",
+            "nexgen_test_token", "mcp-remote@0.1.38",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    launched = json.loads(output.read_text(encoding="utf-8"))
+    assert launched["header"] == "Bearer fixture-secret-value"
+    assert "fixture-secret-value" not in " ".join(launched["argv"])
+    assert "Authorization:${NEXGEN_MCP_AUTH_HEADER}" in launched["argv"]
 
 
 def test_playwright_wrapper_and_manifest_share_an_exact_pin():

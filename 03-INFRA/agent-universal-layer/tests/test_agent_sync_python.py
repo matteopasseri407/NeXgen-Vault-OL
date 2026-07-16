@@ -236,6 +236,18 @@ def test_offline_apply_requires_explicit_override(sandbox, monkeypatch):
     assert "skills_index" in called
 
 
+def test_apply_renders_antigravity_source_before_propagating_it(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_REMOTE", "local")
+    called: list[str] = []
+    _patch_apply_phases(monkeypatch, mod, called)
+
+    assert mod.main(["apply"]) == 0
+    assert called.index("mcp_render") < called.index("antigravity_mcp")
+
+
 def test_apply_returns_nonzero_when_a_declared_phase_fails(sandbox, monkeypatch):
     mod = load_agent_sync_module(sandbox)
     monkeypatch.setenv("HOME", str(sandbox.home))

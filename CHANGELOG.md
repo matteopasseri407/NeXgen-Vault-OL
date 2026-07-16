@@ -8,6 +8,20 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## [0.5.5] - 2026-07-16
+
+Windows convergence follow-up. This release remains Alpha.
+
+### Fixed
+
+- An explicit `retired_servers` manifest list now removes deliberately retired MCP entries from all generated CLI dialects while preserving unknown live connectors by default.
+- Antigravity HTTP MCPs now use an engine-owned Node bridge that keeps bearer values in the child environment and avoids the Windows argument-spacing bug that hid authenticated remote servers.
+- `agent-sync` renders Antigravity's source before propagating it, so no-symlink Windows installs cannot copy a stale generation.
+- The Windows doctor reads the target content of Antigravity symlinks instead of treating their zero-length link metadata as an empty config.
+
+Release gate: full Windows pytest suite, public leak scan, live Antigravity
+consumer probe, GitHub Actions, signed commit and signed tag.
+
 ## [0.5.4] - 2026-07-16
 
 Windows host-safety hotfix. This release remains Alpha: the independent,

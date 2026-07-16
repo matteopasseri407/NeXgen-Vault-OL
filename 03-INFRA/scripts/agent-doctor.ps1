@@ -404,11 +404,11 @@ if ($Strict) {
   } else {
     bad "Antigravity global MCP path does NOT point to the generated source ($AgGlobal)"
   }
-  if ((Test-Path -LiteralPath $AgGlobal) -and (Get-Item -LiteralPath $AgGlobal).Length -gt 0) {
-    ok "Antigravity global mcp_config.json not empty"
-  } else {
-    bad "Antigravity global mcp_config.json empty or missing"
-  }
+  try {
+    $AgGlobalContent = if (Test-Path -LiteralPath $AgGlobal) { [IO.File]::ReadAllText($AgGlobal) } else { "" }
+  } catch { $AgGlobalContent = "" }
+  if ($AgGlobalContent.Length -gt 0) { ok "Antigravity global mcp_config.json not empty" }
+  else { bad "Antigravity global mcp_config.json empty or missing" }
   if ($expectedAg.Count -eq 0) {
     warn "no expected Antigravity MCP servers derived from the manifest -- skipping the core-servers content check"
   } elseif (Test-Path -LiteralPath $AgGlobal) {

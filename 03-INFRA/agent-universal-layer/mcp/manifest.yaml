@@ -22,6 +22,11 @@
 
 schema_version: 1
 
+# Add an exact old server name here only after a deliberate retirement. Live
+# connectors outside `servers` remain additive by default; tombstones are the
+# explicit, cross-CLI removal mechanism.
+retired_servers: []
+
 servers:
 
   # ---- interactive browser (always available) ------------------------

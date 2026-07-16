@@ -2107,7 +2107,6 @@ def main(argv: list[str] | None = None) -> int:
             phases: list[tuple[str, Callable[[Env], object]]] = [
                 ("data_migrations", data_migrations),
                 ("instructions", instructions),
-                ("antigravity_mcp", antigravity_mcp),
                 ("utils", utils),
                 ("local_model_runtime", local_model_runtime),
                 ("install_scheduler", install_scheduler),
@@ -2117,6 +2116,11 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 phases.append(("mcp_render", mcp_render))
             phases.extend([
+                # Render Antigravity's canonical source before propagating it.
+                # On Windows without symlink privilege make_link() falls back
+                # to a real copy, so the old order could copy stale JSON and
+                # leave derivatives one generation behind.
+                ("antigravity_mcp", antigravity_mcp),
                 ("vault_skills", vault_skills),
                 ("runtimes", runtimes),
                 ("skills_index", skills_index),

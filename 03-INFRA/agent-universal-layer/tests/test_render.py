@@ -323,6 +323,83 @@ def test_extra_server_preserved_and_reported(sandbox_with_live_configs, cli, cap
         assert TOP_KEY[cli] and "legacy-extra-tool" in after[TOP_KEY[cli]]
 
 
+@pytest.mark.parametrize("cli", DIALECTS)
+def test_explicit_retirement_removes_the_stale_server_across_dialects(sandbox_with_live_configs, cli):
+    sb = sandbox_with_live_configs
+    manifest_path = sb.mcp_dir / "manifest.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    # One canonical tombstone follows every dialect's key normalization, so
+    # Codex removes the underscore form without a duplicate manifest entry.
+    manifest["retired_servers"] = ["legacy-extra-tool"]
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    mod = load_render_module(sb)
+    assert getattr(mod, WRITE_FN[cli])() == 0
+
+    path = sb.live_config_path(cli)
+    if cli == "codex":
+        after = tomllib.loads(path.read_text(encoding="utf-8"))
+        assert "legacy_extra_tool" not in after["mcp_servers"]
+    else:
+        after = json.loads(path.read_text(encoding="utf-8"))
+        assert "legacy-extra-tool" not in after[TOP_KEY[cli]]
+
+
+@pytest.mark.parametrize(
+    ("server_name", "table_header"),
+    [
+        ("legacy.tool", '[mcp_servers."legacy.tool"]'),
+    ],
+)
+def test_codex_retirement_handles_every_valid_toml_key_shape(
+    sandbox_with_live_configs, server_name, table_header
+):
+    sb = sandbox_with_live_configs
+    manifest_path = sb.mcp_dir / "manifest.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["retired_servers"] = [server_name]
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    path = sb.live_config_path("codex")
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + f'\n{table_header}\ncommand = "node"\nargs = []\n',
+        encoding="utf-8",
+    )
+
+    mod = load_render_module(sb)
+    assert mod.write_codex() == 0
+    after = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert server_name not in after["mcp_servers"]
+
+
+def test_toml_table_path_has_no_reserved_key_collision(sandbox):
+    mod = load_render_module(sandbox)
+    assert mod._toml_table_path("mcp_servers.__nexgen_table_marker__") == (
+        "mcp_servers",
+        "__nexgen_table_marker__",
+    )
+
+
+def test_codex_renders_an_active_name_containing_a_dot_as_one_quoted_key(sandbox_with_live_configs):
+    sb = sandbox_with_live_configs
+    manifest_path = sb.mcp_dir / "manifest.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["servers"]["active.tool"] = {
+        "transport": "stdio",
+        "command": "node",
+        "args": ["tool.mjs"],
+        "targets": ["codex"],
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    mod = load_render_module(sb)
+    assert mod.write_codex() == 0
+    raw = sb.live_config_path("codex").read_text(encoding="utf-8")
+    assert '[mcp_servers."active.tool"]' in raw
+    expected = mod.r_codex("active.tool", mod.os_view(manifest["servers"]["active.tool"]))
+    assert tomllib.loads(raw)["mcp_servers"]["active.tool"]["command"] == expected["command"]
+
+
 # ---- test 6: backup dopo --write, pruning tiene al massimo 3 ---------------
 
 @pytest.mark.parametrize("cli", DIALECTS)
@@ -596,7 +673,10 @@ def test_os_view_windows_normalizes_common_mcp_wrappers(sandbox, monkeypatch):
     assert mod.os_view({**base, "command": "node"})["command"] == "node.exe"
     assert mod.os_view({**base, "command": "python3"})["command"] == "python"
     http = {"transport": "http", "url": "http://127.0.0.1:1", "auth": {"env": "TOKEN"}}
-    assert mod.r_antigravity("http", http)["command"] == "npx.cmd"
+    rendered_http = mod.r_antigravity("http", http)
+    assert rendered_http["command"] == "node.exe"
+    assert rendered_http["args"][-2:] == ["TOKEN", mod.MCP_REMOTE_PACKAGE]
+    assert rendered_http["args"][0].endswith("mcp-http-bridge.mjs")
     # An explicit Windows override wins first, then receives the same safe
     # normalization as a portable manifest entry.
     overridden = {**base, "command": "python3", "windows": {"command": "npx"}}
@@ -714,6 +794,92 @@ def test_redact_masks_secrets_and_env_refs(sandbox):
     assert mod.redact("Bearer sometoken123", key="headers") in ("<AUTH>",) or "sometoken123" not in mod.redact("Bearer sometoken123")
     assert mod.redact("plain-value", key="command") == "plain-value"
     assert mod.redact("abc123", key="token") == "<AUTH>"
+    assert mod.redact({"env": {"CUSTOM_NAME": "sensitive-value"}})["env"]["CUSTOM_NAME"] == "<AUTH>"
+    assert mod.redact_for_log({"args": ["--api-key", "short-sensitive"]}) == {
+        "args": ["<REDACTED>", "<REDACTED>"]
+    }
+
+
+def test_cmd_diff_detects_path_drift_without_printing_live_values(sandbox, monkeypatch, capsys):
+    mod = load_render_module(sandbox)
+    manifest = mod.load_manifest(quiet=True)
+    codex = dict(mod.CLI["codex"])
+    base_render = codex["render"]
+
+    def render_with_expected_path(name, spec):
+        rendered = base_render(name, spec)
+        if name == "fake-codex-only":
+            rendered.setdefault("env", {})["PATH"] = "fixture-bounded-path"
+        return rendered
+
+    codex["render"] = render_with_expected_path
+    current = {
+        codex["name"](name): codex["render"](name, spec)
+        for name, spec in manifest.items()
+        if "codex" in spec["targets"]
+    }
+    drifted = current["fake_codex_only"]
+    drifted["env"]["PATH"] = "fixture-broken-path"
+    drifted["env"]["API_TOKEN"] = "fixture-sensitive-value"
+    monkeypatch.setattr(mod, "CLI", {"codex": codex})
+    monkeypatch.setattr(mod, "load_current", lambda cli: current)
+
+    assert mod.cmd_diff() == 0
+    output = capsys.readouterr().out
+    assert "[DIFF]   fake-codex-only" in output
+    assert "env.PATH" in output
+    assert "fixture-broken-path" not in output
+    assert "fixture-sensitive-value" not in output
+
+
+def test_antigravity_retirement_never_prints_inline_env_secrets(sandbox_with_live_configs, capsys):
+    sb = sandbox_with_live_configs
+    manifest_path = sb.mcp_dir / "manifest.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["retired_servers"] = ["retired-secret"]
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    path = sb.live_config_path("antigravity")
+    live = json.loads(path.read_text(encoding="utf-8"))
+    live["mcpServers"]["retired-secret"] = {
+        "command": "node",
+        "args": ["--api-key", "positional-sensitive-value"],
+        "env": {"API_TOKEN": "fixture-sensitive-value", "CUSTOM_NAME": "another-sensitive-value"},
+    }
+    path.write_text(json.dumps(live, indent=2), encoding="utf-8")
+
+    mod = load_render_module(sb)
+    assert mod.write_antigravity() == 0
+    output = capsys.readouterr().out
+    assert "fixture-sensitive-value" not in output
+    assert "another-sensitive-value" not in output
+    assert "positional-sensitive-value" not in output
+    assert "<REDACTED>" in output
+
+
+def test_codex_retirement_never_prints_inline_env_secrets(sandbox_with_live_configs, capsys):
+    sb = sandbox_with_live_configs
+    manifest_path = sb.mcp_dir / "manifest.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["retired_servers"] = ["retired-secret"]
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    path = sb.live_config_path("codex")
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + '\n[mcp_servers.retired_secret]\ncommand = "node"\n'
+          'args = ["--password", "positional-sensitive-value"]\n'
+          '[mcp_servers.retired_secret.env]\n'
+          'API_TOKEN = "fixture-sensitive-value"\n'
+          'CUSTOM_NAME = "another-sensitive-value"\n',
+        encoding="utf-8",
+    )
+
+    mod = load_render_module(sb)
+    assert mod.write_codex() == 0
+    output = capsys.readouterr().out
+    assert "fixture-sensitive-value" not in output
+    assert "another-sensitive-value" not in output
+    assert "positional-sensitive-value" not in output
+    assert "<REDACTED>" in output
 
 
 # ---- --expected-servers: machine-consumable listing for agent-doctor -------
@@ -836,7 +1002,7 @@ def test_written_file_never_contains_expanded_token(sandbox_with_live_configs, c
 
     expected_ref = {
         "claude": "${FAKE_TOKEN}",
-        "antigravity": "Bearer ${FAKE_TOKEN}",
+        "antigravity": '"FAKE_TOKEN"',
         "opencode": "Bearer {env:FAKE_TOKEN}",
         "codex": '"FAKE_TOKEN"',
     }[cli]

@@ -67,6 +67,44 @@ def test_npx_without_pin_is_rejected():
         validate_mcp_manifest(manifest, SOURCE)
 
 
+def test_retired_server_names_are_validated_and_cannot_remain_active():
+    manifest = {
+        "schema_version": 1,
+        "retired_servers": ["under-test"],
+        "servers": {
+            "under-test": {
+                "transport": "stdio",
+                "command": "node",
+                "targets": ["claude"],
+            }
+        },
+    }
+    with pytest.raises(ConfigValidationError, match="both active and retired"):
+        validate_mcp_manifest(manifest, SOURCE)
+
+
+def test_invalid_retired_server_name_is_rejected():
+    manifest = {"schema_version": 1, "retired_servers": ["../escape"], "servers": {}}
+    with pytest.raises(ConfigValidationError, match="retired MCP server name"):
+        validate_mcp_manifest(manifest, SOURCE)
+
+
+def test_retired_server_cannot_collide_with_active_codex_normalized_name():
+    manifest = {
+        "schema_version": 1,
+        "retired_servers": ["active-tool"],
+        "servers": {
+            "active_tool": {
+                "transport": "stdio",
+                "command": "node",
+                "targets": ["codex"],
+            }
+        },
+    }
+    with pytest.raises(ConfigValidationError, match="collides with active Codex server"):
+        validate_mcp_manifest(manifest, SOURCE)
+
+
 def test_npx_with_no_package_arg_at_all_is_rejected():
     manifest = _manifest(
         {
