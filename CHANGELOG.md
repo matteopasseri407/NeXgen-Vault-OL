@@ -8,7 +8,9 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
-## Unreleased
+## [0.8.0] - 2026-07-17
+
+One canonical skill now surfaces as an explicitly invocable command on every supported runtime ("write a command once, invoke it on all four CLIs"), plus six starter command skills. Maturity stays **Beta** (stability is not yet guaranteed).
 
 ### Added
 
