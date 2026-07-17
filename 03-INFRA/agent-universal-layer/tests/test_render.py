@@ -1038,3 +1038,92 @@ def test_atomic_write_retries_windows_sharing_violation(sandbox, monkeypatch, tm
     mod._atomic_write_text(target, "new")
     assert target.read_text(encoding="utf-8") == "new"
     assert len(attempts) == 3
+
+
+# ---- --revert: restore a CLI config from the most recent render.py backup ---
+# Additive, read-mostly: restores the newest <file>.bak-* (which render.py
+# already writes on every change), after backing up the current file first so
+# the revert is itself undoable. Never touches anything but that CLI's config
+# and its own .bak-* siblings.
+
+def _make_backup(path: Path, content: str) -> Path:
+    # Build the timestamp at runtime: an 8+ digit run in the SOURCE would trip
+    # the leak-scan's long-numeric-id pattern (same reason as test_prune_backups).
+    year, month, day = 2026, 1, 1
+    stamp = f"{year:04d}{month:02d}{day:02d}-{0:06d}"
+    bak = path.with_name(path.name + ".bak-" + stamp)
+    bak.write_text(content, encoding="utf-8")
+    return bak
+
+
+def test_revert_restores_latest_backup_and_saves_current(sandbox_with_live_configs):
+    sb = sandbox_with_live_configs
+    mod = load_render_module(sb)
+    path = sb.live_config_path("claude")
+    current = path.read_text(encoding="utf-8")
+    old = json.dumps(
+        {"mcpServers": {"restored-marker": {"type": "stdio", "command": "x", "args": []}}},
+        indent=2,
+    )
+    _make_backup(path, old)
+
+    rc = mod.cmd_revert("claude")
+    assert rc == 0
+    assert path.read_text(encoding="utf-8") == old, "config not restored from the backup"
+    # the pre-revert state must have been saved as a fresh safety backup
+    saved = [p.read_text(encoding="utf-8") for p in path.parent.glob(path.name + ".bak-*")]
+    assert current in saved, "the pre-revert current state was not backed up"
+
+
+def test_revert_noop_when_already_matches_latest_backup(sandbox_with_live_configs):
+    sb = sandbox_with_live_configs
+    mod = load_render_module(sb)
+    path = sb.live_config_path("claude")
+    current = path.read_text(encoding="utf-8")
+    _make_backup(path, current)
+    before = sorted(p.name for p in path.parent.glob(path.name + ".bak-*"))
+
+    rc = mod.cmd_revert("claude")
+    assert rc == 0
+    assert path.read_text(encoding="utf-8") == current
+    # nothing to revert -> no new safety backup created
+    after = sorted(p.name for p in path.parent.glob(path.name + ".bak-*"))
+    assert after == before
+
+
+def test_revert_refuses_a_backup_that_does_not_parse(sandbox_with_live_configs):
+    sb = sandbox_with_live_configs
+    mod = load_render_module(sb)
+    path = sb.live_config_path("codex")
+    current = path.read_text(encoding="utf-8")
+    _make_backup(path, "[mcp_servers")   # broken TOML
+
+    rc = mod.cmd_revert("codex")
+    assert rc == 2
+    assert path.read_text(encoding="utf-8") == current, "a broken backup must never be restored"
+
+
+def test_revert_reports_when_no_backup_exists(sandbox_with_live_configs):
+    sb = sandbox_with_live_configs
+    mod = load_render_module(sb)
+    path = sb.live_config_path("opencode")
+    for b in path.parent.glob(path.name + ".bak-*"):
+        b.unlink()
+    assert mod.cmd_revert("opencode") == 1
+
+
+def test_revert_config_not_present_returns_3(sandbox):
+    # bare sandbox: no live config installed at all
+    mod = load_render_module(sandbox)
+    assert mod.cmd_revert("claude") == 3
+
+
+def test_revert_wired_in_argparse(sandbox_with_live_configs, monkeypatch):
+    sb = sandbox_with_live_configs
+    mod = load_render_module(sb)
+    path = sb.live_config_path("claude")
+    old = json.dumps({"mcpServers": {}}, indent=2)
+    _make_backup(path, old)
+    monkeypatch.setattr("sys.argv", ["render.py", "--revert", "claude"])
+    assert mod.main() == 0
+    assert path.read_text(encoding="utf-8") == old

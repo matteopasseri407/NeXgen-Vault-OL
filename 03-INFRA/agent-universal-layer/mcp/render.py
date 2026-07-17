@@ -20,7 +20,11 @@ dialect.
     manifest server names that target CLI and pass require_env filtering.
     Machine-consumable, meant for other scripts (agent-doctor.sh/.ps1's
     --strict block) to derive their own expected-server set instead of
-    hardcoding it. Exit 0, or 2 on a manifest error."""
+    hardcoding it. Exit 0, or 2 on a manifest error.
+  - --revert CLI: restore that CLI's native config from the most recent
+    render.py backup (<file>.bak-*), backing up the current file first so the
+    revert is itself undoable. Read-mostly and additive: touches only that
+    CLI's own config file and its .bak-* siblings."""
 from __future__ import annotations
 import argparse, difflib, json, os, platform, re, shutil, sys, time
 from pathlib import Path
@@ -950,6 +954,50 @@ def cmd_expected_servers(cli):
             print(n)
     return 0
 
+def _cli_config_path(cli):
+    """Native config path whose MCP section render.py writes (and backs up).
+    Mirrors load_current()'s per-CLI paths so --revert and --write agree."""
+    return {
+        "claude": HOME / ".claude.json",
+        "codex": HOME / ".codex/config.toml",
+        "antigravity": HOME / ".gemini/antigravity/mcp_config.json",
+        "opencode": _opencode_config_path(),
+    }[cli]
+
+def cmd_revert(cli):
+    """Restore a CLI's native config from the most recent render.py backup
+    (`<file>.bak-YYYYMMDD-HHMMSS`, written on every --write that changed the
+    file). The CURRENT file is itself backed up first, so a revert is
+    undoable; the newest backup is then validated in its own format and
+    restored atomically. Touches nothing but this one CLI's config and its
+    own .bak-* siblings.
+    Exit: 0 restored or already-current, 1 no backup to restore, 2 the backup
+    itself does not parse, 3 config not present."""
+    path = _cli_config_path(cli)
+    if not path.exists():
+        print(f">>> {path.name} not present: nothing to revert for {cli}.")
+        return 3
+    backups = sorted(path.parent.glob(path.name + ".bak-*"))
+    if not backups:
+        print(f">>> no {path.name}.bak-* backup found: nothing to revert (render.py writes one on every change).")
+        return 1
+    latest = backups[-1]
+    restored = latest.read_text("utf-8")
+    try:
+        (toml_loads if path.suffix == ".toml" else json.loads)(restored)
+    except (json.JSONDecodeError, TOMLDecodeError, ValueError) as e:
+        print(f">>> STOP: the backup {latest.name} does not parse ({e}); refusing to restore a broken file.")
+        return 2
+    current = path.read_text("utf-8")
+    if current == restored:
+        print(f">>> {path.name} already matches the latest backup {latest.name}: nothing to revert.")
+        return 0
+    safety = _secure_backup(path, current, "utf-8")   # so the revert is itself undoable
+    _prune_backups(path)
+    _atomic_write_text(path, restored, "utf-8")
+    print(f">>> REVERTED {path.name} from {latest.name} (current state saved as {safety.name}).")
+    return 0
+
 def cmd_write(cli):
     if cli == "opencode":
         return write_opencode()
@@ -967,9 +1015,13 @@ def main():
     ap.add_argument("--write", metavar="CLI", choices=list(CLI), help="regenerate a CLI's MCP config (default: diff only).")
     ap.add_argument("--expected-servers", metavar="CLI", choices=list(CLI),
                      help="print (one per line) the manifest server names that target CLI and pass require_env filtering; machine-consumable, exit 0.")
+    ap.add_argument("--revert", metavar="CLI", choices=list(CLI),
+                     help="restore a CLI's native config from the most recent render.py .bak-* backup (backs up the current file first).")
     args = ap.parse_args()
     if args.expected_servers:
         return cmd_expected_servers(args.expected_servers)
+    if args.revert:
+        return cmd_revert(args.revert)
     if args.write:
         return cmd_write(args.write)
     return cmd_diff()
