@@ -210,6 +210,21 @@ if (Test-Path -LiteralPath $Canon) {
   if ($refs.Count -eq 0) { ok "no vault-relative bootstrap pointers to verify" }
   elseif ($missingPtr.Count -eq 0) { ok "all $($refs.Count) bootstrap load-on-demand pointers resolve" }
   else { warn "bootstrap load-on-demand pointer(s) not found under the vault: $($missingPtr -join ', ') - a renamed/removed note leaves a dead pointer" }
+  # Required invariant rules present in the canonical AGENTS.md (guards the
+  # non-negotiable security/behaviour rules from silently vanishing - the
+  # vault<->public drift class). Read-only, WARN-only; skips if the checker or
+  # its rules file isn't present in this engine tree.
+  $rulesCheck = Join-Path $PSScriptRoot "check_required_rules.py"
+  $rulesFile = Join-Path $EngineInfra "agent-universal-layer\instructions\required-rules.txt"
+  if ($NexgenPython -and (Test-Path -LiteralPath $rulesCheck) -and (Test-Path -LiteralPath $rulesFile)) {
+    $rulesOut = & $NexgenPythonCommand @NexgenPythonPrefix $rulesCheck $Canon $rulesFile 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      ok "canonical AGENTS.md carries all required invariant rules"
+    } else {
+      $miss = (@($rulesOut | Where-Object { $_ -match '^\s+- ' }) | ForEach-Object { $_ -replace '^\s+- ', '' }) -join '; '
+      warn "canonical AGENTS.md is missing required invariant rule(s): $(if ($miss) { $miss } else { 'see check' })"
+    }
+  }
 } else {
   warn "canonical AGENTS.md not found, skipping bootstrap hygiene checks"
 }

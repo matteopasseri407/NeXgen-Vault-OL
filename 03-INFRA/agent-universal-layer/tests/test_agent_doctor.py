@@ -711,3 +711,40 @@ def test_bootstrap_hygiene_present_and_warn_only_in_both_twins():
     assert 'bad "bootstrap AGENTS.md' not in powershell
     assert 'bad "oversized detail note' not in powershell
     assert 'bad "bootstrap load-on-demand' not in powershell
+
+
+# ── Required invariant-rules drift guard (competitor-borrow #4, 2026-07-17) ──
+# The doctor WARNs (never fails) when the canonical AGENTS.md is missing a
+# non-negotiable rule declared in required-rules.txt. It skips silently when
+# the rules file isn't present in the engine tree. CI enforces the same on the
+# shipped public AGENTS.md (as a hard failure). Mirrored in both twins.
+
+def test_required_rules_guard_warns_when_a_rule_is_missing(sandbox):
+    (sandbox.ul / "instructions" / "required-rules.txt").write_text(
+        "Alpha Invariant\nBeta Invariant\n", encoding="utf-8")
+    (sandbox.ul / "instructions" / "AGENTS.md").write_text(
+        "only Alpha Invariant here\n", encoding="utf-8")
+    result = _run_doctor(sandbox)
+    assert _lines_with(result.stdout, "⚠", "missing required invariant rule"), result.stdout
+    assert "Beta Invariant" in result.stdout
+    assert not _lines_with(result.stdout, "✗", "required invariant rule"), result.stdout
+
+
+def test_required_rules_guard_ok_when_all_present(sandbox):
+    (sandbox.ul / "instructions" / "required-rules.txt").write_text(
+        "Alpha Invariant\nBeta Invariant\n", encoding="utf-8")
+    (sandbox.ul / "instructions" / "AGENTS.md").write_text(
+        "Alpha Invariant and Beta Invariant both present\n", encoding="utf-8")
+    result = _run_doctor(sandbox)
+    assert _lines_with(result.stdout, "✓", "carries all required invariant rules"), result.stdout
+
+
+def test_required_rules_guard_present_and_warn_only_in_both_twins():
+    repo = Path(__file__).resolve().parents[3]
+    bash = (repo / "03-INFRA/scripts/agent-doctor.sh").read_text(encoding="utf-8")
+    powershell = (repo / "03-INFRA/scripts/agent-doctor.ps1").read_text(encoding="utf-8")
+    for content in (bash, powershell):
+        assert "check_required_rules.py" in content
+        assert "required invariant rule" in content
+    assert 'fail "canonical AGENTS.md is missing required invariant' not in bash
+    assert 'bad "canonical AGENTS.md is missing required invariant' not in powershell

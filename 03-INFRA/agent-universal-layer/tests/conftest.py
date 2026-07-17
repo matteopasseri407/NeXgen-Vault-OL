@@ -155,6 +155,7 @@ def _copy_engine_scripts(sandbox: Sandbox) -> None:
     shutil.copy2(REAL_UL / "mcp" / "render.py", sandbox.mcp_dir / "render.py")
     for name in (
         "agent-sync.sh", "agent-sync.ps1", "agent_sync.py", "agent-skill.py", "skills-sync.py", "config_schema.py",
+        "check_required_rules.py",
         "agent-doctor.sh", "agent-doctor.ps1",
         "council.sh", "council.ps1", "vault-push.sh", "vault-push.ps1", "vault-groom.sh", "vault-groom.ps1",
         "vault_groom_audit.py", "agent-now.sh", "agent-now.ps1", "firecrawl-local.sh", "firecrawl-local.ps1",

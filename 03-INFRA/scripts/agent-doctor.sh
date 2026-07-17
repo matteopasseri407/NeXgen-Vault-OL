@@ -228,6 +228,20 @@ EOF
   else
     warn "bootstrap load-on-demand pointer(s) not found under the vault: $missing_ptr -- a renamed/removed note leaves a dead pointer"
   fi
+  # Required invariant rules present in the canonical AGENTS.md (guards the
+  # non-negotiable security/behaviour rules from silently vanishing -- the
+  # vault<->public drift class). Read-only, WARN-only; skips if the checker or
+  # its rules file isn't present in this engine tree.
+  RULES_CHECK="$SELF_DIR/check_required_rules.py"
+  RULES_FILE="$ENGINE_UL/instructions/required-rules.txt"
+  if command -v python3 >/dev/null 2>&1 && [ -f "$RULES_CHECK" ] && [ -f "$RULES_FILE" ]; then
+    if rules_out="$(python3 "$RULES_CHECK" "$CANON" "$RULES_FILE" 2>/dev/null)"; then
+      ok "canonical AGENTS.md carries all required invariant rules"
+    else
+      miss="$(printf '%s\n' "$rules_out" | sed -n 's/^    - //p' | tr '\n' ';')"
+      warn "canonical AGENTS.md is missing required invariant rule(s): ${miss:-see check} -- run: python3 $RULES_CHECK $CANON $RULES_FILE"
+    fi
+  fi
 else
   warn "canonical AGENTS.md not found, skipping bootstrap hygiene checks"
 fi

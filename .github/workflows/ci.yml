@@ -59,6 +59,16 @@ jobs:
       - name: Preflight (install.sh --check)
         run: bash install.sh --check
 
+      - name: Required invariant rules present in the canonical AGENTS.md
+        # Drift guard: fails if a non-negotiable security/behaviour rule
+        # silently drops out of the shipped bootstrap. Update
+        # required-rules.txt in the same change when a rule is intentionally
+        # reworded (that edit is the acknowledgement it moved).
+        run: |
+          python3 03-INFRA/scripts/check_required_rules.py \
+            03-INFRA/agent-universal-layer/instructions/AGENTS.md \
+            03-INFRA/agent-universal-layer/instructions/required-rules.txt
+
       - name: No committed Python bytecode or caches
         run: |
           hits="$(git ls-files | grep -E '\.pyc$|(^|/)__pycache__/' || true)"
