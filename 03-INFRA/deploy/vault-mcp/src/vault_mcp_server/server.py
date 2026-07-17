@@ -141,8 +141,9 @@ def create_server(settings: Settings) -> tuple[FastMCP, VaultService]:
         "Git-backed MCP server for Markdown vaults. "
         "Use get_start_here first, then search_notes/read_note/list_related. "
         "Write tools are enabled for trusted clients only. "
-        "Use create_note for new notes, append_note for additive updates, and update_note with expected_hash "
-        "for replacing existing notes. Every write is committed to Git."
+        "Use create_note for new notes, append_note for additive updates, update_note with expected_hash "
+        "for replacing whole notes, and update_section with a per-section hash (from read_note's `sections`) "
+        "for surgical single-section edits. Every write is committed to Git."
         if settings.write_enabled
         else (
             "Read-only MCP server for Markdown vaults. "
@@ -228,6 +229,24 @@ def create_server(settings: Settings) -> tuple[FastMCP, VaultService]:
 
             return vault.update_note(
                 note_ref=note_ref,
+                content=content,
+                expected_hash=expected_hash,
+                message=message,
+            )
+
+        @mcp.tool()
+        def update_section(
+            note_ref: str,
+            section_heading: str,
+            content: str,
+            expected_hash: str,
+            message: str = "",
+        ) -> dict[str, Any]:
+            """Replace ONE section of a note (its ATX heading plus body and subsections) when expected_hash matches that section's current hash from read_note's `sections`. Prefer this over update_note for surgical edits: smaller diffs, and concurrent edits to other sections stay valid."""
+
+            return vault.update_section(
+                note_ref=note_ref,
+                section_heading=section_heading,
                 content=content,
                 expected_hash=expected_hash,
                 message=message,

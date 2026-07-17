@@ -8,6 +8,12 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## [Unreleased]
+
+### Added
+
+- Section-level editing in the bundled `vault-library` MCP server: a new `update_section` write tool replaces exactly one ATX-heading section of a note under a **per-section** compare-and-swap hash, and `read_note` now returns an additive `sections` list (heading, level, per-section hash) to drive it. Compared to whole-note `update_note` — which stays untouched — the diff shrinks to the addressed section and a concurrent edit landed in a *different* section of the same note no longer invalidates the write. Fail-closed by design: unknown headings error out listing the available ones, duplicated/ambiguous headings are refused (fall back to `update_note`), heading-looking lines inside fenced code blocks are never boundaries, replacements must keep the section's heading level and cannot inject same-or-shallower headings that would reshape the note, and truncated (oversize) reads expose no section hashes at all. Covered by new behavioral tests against a real Git-backed vault plus an extended CI container smoke (edit one section, verify the sibling survives byte-identical, stale hash refused).
+
 ## [0.8.0] - 2026-07-17
 
 One canonical skill now surfaces as an explicitly invocable command on every supported runtime ("write a command once, invoke it on all four CLIs"), plus six starter command skills. Maturity stays **Beta** (stability is not yet guaranteed).

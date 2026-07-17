@@ -12,7 +12,10 @@ transport) that mounts the vault worktree plus its bare repo and exposes:
 - read tools: `get_start_here`, `read_note`, `search_notes`, `list_related`,
   `recent_activity`
 - write tools (only when `VAULT_WRITE_ENABLED=true`): `create_note`,
-  `append_note`, `update_note` (guarded by `expected_hash`)
+  `append_note`, `update_note` (guarded by `expected_hash`), and
+  `update_section` (surgical single-section edits guarded by a
+  per-section hash from `read_note`'s `sections` — concurrent edits to
+  other sections of the same note stay valid)
 
 Every write is serialized with a process lock, restricted to Markdown paths
 (`99-SECRETS` and `.git` are always refused), and committed to the bare repo
