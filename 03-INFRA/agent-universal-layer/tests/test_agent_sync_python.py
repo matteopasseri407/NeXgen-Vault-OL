@@ -558,6 +558,29 @@ def test_run_python_script_returns_real_output_on_success(sandbox):
 # agent-doctor's "OpenCode instructions -> AGENTS.md" check failed forever
 # on a fresh install, for one of the 4 officially supported CLIs.
 
+def test_windows_opencode_path_prefers_current_xdg_location(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("APPDATA", str(sandbox.home / "AppData" / "Roaming"))
+
+    assert mod._opencode_config_path(sandbox.home) == (
+        sandbox.home / ".config" / "opencode" / "opencode.json"
+    )
+
+
+def test_windows_opencode_path_keeps_appdata_only_compatibility(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    appdata_root = sandbox.home / "AppData" / "Roaming"
+    monkeypatch.setenv("APPDATA", str(appdata_root))
+    xdg = sandbox.home / ".config" / "opencode" / "opencode.json"
+    xdg.unlink(missing_ok=True)
+    appdata = appdata_root / "opencode" / "opencode.json"
+    appdata.parent.mkdir(parents=True, exist_ok=True)
+    appdata.write_text("{}\n", encoding="utf-8")
+
+    assert mod._opencode_config_path(sandbox.home) == appdata
+
 def test_instructions_adds_opencode_pointer_to_existing_config(sandbox_with_live_configs, monkeypatch):
     sandbox = sandbox_with_live_configs
     mod = load_agent_sync_module(sandbox)
@@ -570,7 +593,7 @@ def test_instructions_adds_opencode_pointer_to_existing_config(sandbox_with_live
     oc_path = sandbox.live_config_path("opencode")
     config = json.loads(oc_path.read_text(encoding="utf-8"))
     canon = env.instance_ul / "instructions" / "AGENTS.md"
-    expected_entry = "~/" + str(canon.relative_to(sandbox.home))
+    expected_entry = "~/" + canon.relative_to(sandbox.home).as_posix()
     assert expected_entry in config["instructions"]
     # Additive: pre-existing MCP section and other keys must survive untouched.
     assert config["model"] == "fake-provider/fake-model"
@@ -607,6 +630,34 @@ def test_instructions_opencode_pointer_is_idempotent(sandbox_with_live_configs, 
     # Exactly one backup, from the first (real) write -- the second, no-op
     # call must not detect a "change" and back up again.
     assert len(list(oc_path.parent.glob("opencode.json.pre-instructions-*.bak"))) == 1
+
+
+def test_instructions_opencode_deduplicates_windows_and_posix_spellings(
+    sandbox_with_live_configs, monkeypatch
+):
+    sandbox = sandbox_with_live_configs
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+    env = mod.Env()
+    oc_path = sandbox.live_config_path("opencode")
+    config = json.loads(oc_path.read_text(encoding="utf-8"))
+    canonical = "~/KnowledgeVault/03-INFRA/agent-universal-layer/instructions/AGENTS.md"
+    config["instructions"] = [
+        canonical,
+        canonical.replace("/", "\\"),
+        "~/KnowledgeVault/03-INFRA/another-instruction.md",
+    ]
+    oc_path.write_text(json.dumps(config), encoding="utf-8")
+
+    assert mod.instructions(env) is True
+
+    updated = json.loads(oc_path.read_text(encoding="utf-8"))
+    assert updated["instructions"] == [
+        canonical,
+        "~/KnowledgeVault/03-INFRA/another-instruction.md",
+    ]
 
 
 def test_instructions_opencode_malformed_json_does_not_crash(sandbox_with_live_configs, monkeypatch):
@@ -917,7 +968,21 @@ def test_windows_local_worker_runtime_is_preserved(sandbox, monkeypatch):
     instructions = sandbox.ul / "instructions"
     (instructions / "GEMMA.md").write_text("Gemma bootstrap\n", encoding="utf-8")
     (instructions / "LOCAL-WORKER.md").write_text("Local worker bootstrap\n", encoding="utf-8")
-    (sandbox.scripts_dir / "local-model-agent.ps1").write_text("param()\n", encoding="utf-8")
+    private_scripts = sandbox.vault / "03-INFRA" / "scripts"
+    private_scripts.mkdir(parents=True, exist_ok=True)
+    (private_scripts / "local-model-agent.ps1").write_text("param()\n", encoding="utf-8")
+    legacy = sandbox.home / ".local" / "bin"
+    legacy.mkdir(parents=True, exist_ok=True)
+    (legacy / "gemma-worker.ps1").write_text(
+        "$ScriptPath = Join-Path $PSScriptRoot 'local-model-agent.ps1'\r\n"
+        "& $ScriptPath -Mode worker @args\r\n",
+        encoding="utf-8",
+    )
+    (legacy / "gemma-agent.ps1").write_text(
+        "$ScriptPath = Join-Path $PSScriptRoot 'local-model-agent.ps1'\r\n"
+        "& $ScriptPath -Mode agent @args\r\n",
+        encoding="utf-8",
+    )
 
     env = mod.Env()
     mod.instructions(env)
@@ -926,9 +991,29 @@ def test_windows_local_worker_runtime_is_preserved(sandbox, monkeypatch):
     assert (sandbox.home / "GEMMA.md").exists()
     assert (sandbox.home / "LOCAL-WORKER.md").exists()
     assert (sandbox.home / ".local" / "bin" / "local-model-agent.ps1").exists()
-    for name in ("local-worker.ps1", "local-agent.ps1", "gemma-worker.ps1", "gemma-agent.ps1"):
+    for name in ("local-worker.ps1", "local-agent.ps1"):
         text = (sandbox.home / ".local" / "bin" / name).read_text(encoding="utf-8")
         assert "local-model-agent.ps1" in text
+    assert not (sandbox.home / ".local" / "bin" / "gemma-worker.ps1").exists()
+    assert not (sandbox.home / ".local" / "bin" / "gemma-agent.ps1").exists()
+
+
+def test_windows_local_worker_does_not_delete_user_owned_legacy_alias(sandbox, monkeypatch):
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("USERPROFILE", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+    private_scripts = sandbox.vault / "03-INFRA" / "scripts"
+    private_scripts.mkdir(parents=True, exist_ok=True)
+    (private_scripts / "local-model-agent.ps1").write_text("param()\n", encoding="utf-8")
+    alias = sandbox.home / ".local" / "bin" / "gemma-worker.ps1"
+    alias.parent.mkdir(parents=True, exist_ok=True)
+    alias.write_text("Write-Output 'user owned'\n", encoding="utf-8")
+
+    assert mod.local_model_runtime(mod.Env()) is True
+
+    assert alias.read_text(encoding="utf-8") == "Write-Output 'user owned'\n"
 
 
 def test_windows_runtime_skill_dirs_are_created(sandbox, monkeypatch):

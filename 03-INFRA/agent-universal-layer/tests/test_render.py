@@ -1013,11 +1013,23 @@ def test_written_file_never_contains_expanded_token(sandbox_with_live_configs, c
     assert "sk-" not in raw and "AKIA" not in raw
 
 
-def test_windows_opencode_config_uses_appdata_layout(sandbox, monkeypatch):
+def test_windows_opencode_config_uses_current_xdg_layout(sandbox, monkeypatch):
     mod = load_render_module(sandbox)
     monkeypatch.setattr(mod, "IS_WINDOWS", True)
-    expected = sandbox.home / "AppData" / "Roaming" / "opencode" / "opencode.json"
+    expected = sandbox.home / ".config" / "opencode" / "opencode.json"
     assert mod._opencode_config_path() == expected
+
+
+def test_windows_opencode_config_keeps_existing_appdata_only_install(sandbox, monkeypatch):
+    mod = load_render_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    xdg = sandbox.home / ".config" / "opencode" / "opencode.json"
+    xdg.unlink(missing_ok=True)
+    appdata = sandbox.home / "AppData" / "Roaming" / "opencode" / "opencode.json"
+    appdata.parent.mkdir(parents=True, exist_ok=True)
+    appdata.write_text("{}\n", encoding="utf-8")
+
+    assert mod._opencode_config_path() == appdata
 
 
 def test_atomic_write_retries_windows_sharing_violation(sandbox, monkeypatch, tmp_path):

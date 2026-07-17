@@ -17,21 +17,16 @@
   {
     "file": "03-INFRA/agent-universal-layer/mcp/render.py",
     "code": "E702",
-    "count": 39
+    "count": 37
   },
   {
     "file": "03-INFRA/agent-universal-layer/mcp/render.py",
     "code": "E741",
-    "count": 4
+    "count": 2
   },
   {
     "file": "03-INFRA/agent-universal-layer/tests/test_render.py",
     "code": "F841",
-    "count": 1
-  },
-  {
-    "file": "03-INFRA/scripts/agent_sync.py",
-    "code": "E402",
     "count": 1
   }
 ]

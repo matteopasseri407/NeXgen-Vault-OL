@@ -13,6 +13,7 @@ STESSA sandbox. Confrontiamo baseline vs drift, non l'exit code assoluto.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -59,6 +60,40 @@ def test_doctor_smoke_detects_injected_broken_symlink(sandbox):
     )
     assert "FAIL:" in drifted.stdout
     assert "fake-skill-a" in drifted.stdout or "ROTTE" in drifted.stdout, drifted.stdout
+
+
+def test_doctor_warns_when_opencode_loads_canonical_instructions_twice(sandbox):
+    config_path = sandbox.live_config_path("opencode")
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    canonical = "~/KnowledgeVault/03-INFRA/agent-universal-layer/instructions/AGENTS.md"
+    config["instructions"] = [canonical, canonical.replace("/", "\\")]
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    result = run_agent_doctor(sandbox)
+
+    assert "OpenCode loads the canonical AGENTS.md 2 times" in result.stdout
+
+
+def test_doctor_surfaces_unsafe_and_accumulated_claude_permissions(sandbox):
+    claude_dir = sandbox.home / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "settings.json").write_text(
+        json.dumps({
+            "permissions": {"defaultMode": "bypassPermissions"},
+            "skipDangerousModePermissionPrompt": True,
+        }),
+        encoding="utf-8",
+    )
+    (claude_dir / "settings.local.json").write_text(
+        json.dumps({"permissions": {"allow": ["Bash(git:*)", "Bash(docker:*)"]}}),
+        encoding="utf-8",
+    )
+
+    result = run_agent_doctor(sandbox)
+
+    assert "Claude defaultMode=bypassPermissions" in result.stdout
+    assert "Claude suppresses the dangerous-mode permission warning" in result.stdout
+    assert "Claude has 2 unmanaged persistent allow rule(s)" in result.stdout
 
 
 def test_vault_library_probe_uses_mcp_protocol_headers():

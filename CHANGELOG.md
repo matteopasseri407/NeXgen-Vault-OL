@@ -8,6 +8,17 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## [0.91.2] - 2026-07-17
+
+Migration hardening for Windows hosts upgraded through older NeXgen layouts. Fresh installs were not affected by these accumulated-state problems.
+
+### Fixed
+
+- `agent-sync` normalizes OpenCode instruction paths and keeps exactly one canonical `AGENTS.md` entry. Windows slash variants no longer load the same bootstrap twice. OpenCode's current `~/.config/opencode` path wins when an older `%APPDATA%` config also exists.
+- OpenCode model, provider, and agent profiles are explicitly host-local. The doctor no longer treats one maintainer's DeepSeek or Ollama choices as product policy, and it warns when a retired shared profile still exists in the Vault data plane.
+- The optional Windows local-worker adapter is resolved from private Vault scripts instead of the public engine checkout. Stable `local-worker` and `local-agent` commands remain, while managed `gemma-*` compatibility aliases are retired without deleting user-owned scripts.
+- The doctor reports Claude's unsafe `bypassPermissions` default, a suppressed dangerous-mode warning, and unmanaged persistent allow rules. It also detects duplicate OpenCode bootstrap entries before they become silent context waste.
+
 ## [0.91.1] - 2026-07-17
 
 Windows reliability fixes found during the 0.91 cutover. This patch restores Unicode-safe commands, corrects engine-owned launcher targets after the engine and data split, and makes an expired Claude session visible in the doctor.

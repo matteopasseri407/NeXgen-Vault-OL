@@ -65,11 +65,7 @@ class Sandbox:
         return self.home / "bin-stubs"
 
     def live_config_path(self, cli: str) -> Path:
-        opencode = (
-            self.home / "AppData" / "Roaming" / "opencode" / "opencode.json"
-            if os.name == "nt"
-            else self.home / ".config" / "opencode" / "opencode.json"
-        )
+        opencode = self.home / ".config" / "opencode" / "opencode.json"
         return {
             "claude": self.home / ".claude.json",
             "codex": self.home / ".codex" / "config.toml",

@@ -77,11 +77,11 @@ def _opencode_config_path() -> Path:
     if not IS_WINDOWS:
         return HOME / ".config" / "opencode" / "opencode.json"
     appdata_path = Path(os.environ.get("APPDATA") or (HOME / "AppData" / "Roaming")) / "opencode" / "opencode.json"
-    legacy_path = HOME / ".config" / "opencode" / "opencode.json"
-    # OpenCode installations created before the native Windows layout may
-    # still use XDG-style .config. Preserve that live config and use APPDATA
-    # for new installs.
-    return legacy_path if legacy_path.exists() and not appdata_path.exists() else appdata_path
+    xdg_path = HOME / ".config" / "opencode" / "opencode.json"
+    # OpenCode 1.18 reports this XDG-style directory as its native Windows
+    # config root. Keep APPDATA as a compatibility fallback only when it is
+    # the sole existing config.
+    return xdg_path if xdg_path.exists() or not appdata_path.exists() else appdata_path
 
 # Antigravity reaches HTTP MCP servers through this local bridge.  It is
 # intentionally exact: an implicit npx update would run new code as the user.

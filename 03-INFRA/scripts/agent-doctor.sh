@@ -175,7 +175,20 @@ for pair in "Codex:$HOME/.codex/AGENTS.md" "Antigravity:$HOME/.gemini/config/AGE
   fi
 done
 if [ -f "$OCJSON" ]; then
-  grep -q "instructions/AGENTS.md" "$OCJSON" && ok "OpenCode instructions → AGENTS.md" || fail "OpenCode instructions do NOT point to AGENTS.md"
+  oc_canon_count="$(python3 - "$OCJSON" <<'PY' 2>/dev/null
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    entries = json.load(handle).get("instructions", [])
+suffix = "/agent-universal-layer/instructions/agents.md"
+print(sum(isinstance(item, str) and item.replace("\\", "/").rstrip("/").lower().endswith(suffix) for item in entries))
+PY
+)"
+  case "$oc_canon_count" in
+    1) ok "OpenCode instructions → one canonical AGENTS.md" ;;
+    0) fail "OpenCode instructions do NOT point to AGENTS.md" ;;
+    ''|*[!0-9]*) fail "OpenCode instructions cannot be inspected because opencode.json is invalid" ;;
+    *) warn "OpenCode loads the canonical AGENTS.md $oc_canon_count times; run agent-sync apply to deduplicate slash variants" ;;
+  esac
 else
   fail "missing $OCJSON"
 fi
@@ -738,12 +751,12 @@ sec "OpenCode config"
 if command -v node >/dev/null 2>&1 && [ -f "$OCJSON" ]; then
   if node -e "JSON.parse(require('fs').readFileSync('$OCJSON','utf8'))" 2>/dev/null; then
     ok "opencode.json: valid JSON"
-    grep -q 'opencode-go/deepseek-v4-pro' "$OCJSON" && ok "default = opencode-go/deepseek-v4-pro (Go)" || warn "default model is not opencode-go/deepseek-v4-pro"
-    grep -q '"ollama"' "$OCJSON" && warn "ollama provider present in the shared file (expected DeepSeek only: local is Windows-only)" || ok "provider = DeepSeek only (no local model in the shared config)"
+    ok "OpenCode model/provider profile is host-local; engine sync owns only instructions and MCP"
   else
     fail "opencode.json: invalid JSON"
   fi
 fi
+[ -f "$UL/opencode/opencode.json" ] && warn "legacy shared OpenCode model/provider profile is still present at $UL/opencode/opencode.json; engine sync owns only instructions and MCP, host-local models must stay in the runtime config"
 
 sec "Local model (host-aware)"
 if [ "$HOST" = linux ]; then
@@ -752,6 +765,45 @@ if [ "$HOST" = linux ]; then
   else
     ok "Ollama not listening (fine: on-demand emergency fallback)"
   fi
+fi
+
+sec "Claude security posture"
+SETTINGS="$HOME/.claude/settings.json"
+SETTINGS_LOCAL="$HOME/.claude/settings.local.json"
+claude_security="$(python3 - "$SETTINGS" "$SETTINGS_LOCAL" <<'PY' 2>/dev/null
+import json, pathlib, sys
+settings_path, local_path = map(pathlib.Path, sys.argv[1:])
+mode = ""
+skip = False
+allow_count = 0
+if settings_path.is_file():
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
+    mode = data.get("permissions", {}).get("defaultMode", "")
+    skip = data.get("skipDangerousModePermissionPrompt") is True
+if local_path.is_file():
+    local = json.loads(local_path.read_text(encoding="utf-8"))
+    allow_count = sum(isinstance(item, str) and bool(item.strip()) for item in local.get("permissions", {}).get("allow", []))
+print(f"{mode}|{int(skip)}|{allow_count}")
+PY
+)"
+if [ -n "$claude_security" ]; then
+  claude_mode="${claude_security%%|*}"
+  claude_tail="${claude_security#*|}"
+  claude_skip="${claude_tail%%|*}"
+  claude_allow_count="${claude_tail##*|}"
+  if [ "$claude_mode" = bypassPermissions ]; then
+    warn "Claude defaultMode=bypassPermissions on a networked host; use auto or acceptEdits unless this machine is an isolated sandbox"
+  else
+    ok "Claude does not default to bypassPermissions"
+  fi
+  [ "$claude_skip" = 1 ] && warn "Claude suppresses the dangerous-mode permission warning"
+  if [ "${claude_allow_count:-0}" -gt 0 ] 2>/dev/null; then
+    claude_suffix=""
+    [ "$claude_mode" = bypassPermissions ] && claude_suffix="; they are redundant while bypassPermissions is active"
+    warn "Claude has $claude_allow_count unmanaged persistent allow rule(s) in settings.local.json$claude_suffix"
+  fi
+else
+  warn "Claude settings could not be inspected; permission posture was not checked"
 fi
 
 sec "Claude authentication"
@@ -771,7 +823,6 @@ else
 fi
 
 sec "Claude hooks (vault checkpoint/briefing)"
-SETTINGS="$HOME/.claude/settings.json"
 if [ -f "$SETTINGS" ]; then
   if command -v jq >/dev/null 2>&1; then
     cnt=$(jq -r '[(.hooks.SessionStart[]?.hooks[]?.command), (.hooks.PreCompact[]?.hooks[]?.command)] | map(select(test("claude-vault-checkpoint"))) | length' "$SETTINGS" 2>/dev/null || echo 0)

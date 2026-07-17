@@ -20,9 +20,9 @@ $RenderPy = Join-Path $EngineInfra "agent-universal-layer\mcp\render.py"
 $Canon   = Join-Path $Layer "instructions\AGENTS.md"
 $AppDataRoot = if ($env:APPDATA) { $env:APPDATA } else { Join-Path $HomeDir "AppData\Roaming" }
 $AppDataOcJson = Join-Path $AppDataRoot "opencode\opencode.json"
-$LegacyOcJson  = Join-Path $HomeDir ".config\opencode\opencode.json"
-$OcJson = if ((Test-Path -LiteralPath $LegacyOcJson) -and -not (Test-Path -LiteralPath $AppDataOcJson)) {
-  $LegacyOcJson
+$XdgOcJson  = Join-Path $HomeDir ".config\opencode\opencode.json"
+$OcJson = if ((Test-Path -LiteralPath $XdgOcJson) -or -not (Test-Path -LiteralPath $AppDataOcJson)) {
+  $XdgOcJson
 } else {
   $AppDataOcJson
 }
@@ -172,7 +172,15 @@ foreach ($pair in @(@("Codex", (Join-Path $HomeDir ".codex\AGENTS.md")), @("Anti
   else { bad "$($pair[0]) NOT aligned with the canonical file ($f)" }
 }
 if (Test-Path -LiteralPath $OcJson) {
-  if (Select-String -Quiet -LiteralPath $OcJson -Pattern "instructions/AGENTS.md") { ok "OpenCode instructions -> AGENTS.md" } else { bad "OpenCode instructions do NOT point to AGENTS.md" }
+  try {
+    $ocInstructions = @((Get-Content -Raw -LiteralPath $OcJson | ConvertFrom-Json).instructions)
+    $ocCanonEntries = @($ocInstructions | Where-Object {
+      $_ -is [string] -and $_.Replace('\','/').TrimEnd('/').EndsWith('/agent-universal-layer/instructions/AGENTS.md', [System.StringComparison]::OrdinalIgnoreCase)
+    })
+    if ($ocCanonEntries.Count -eq 1) { ok "OpenCode instructions -> one canonical AGENTS.md" }
+    elseif ($ocCanonEntries.Count -gt 1) { warn "OpenCode loads the canonical AGENTS.md $($ocCanonEntries.Count) times; run agent-sync apply to deduplicate slash variants" }
+    else { bad "OpenCode instructions do NOT point to AGENTS.md" }
+  } catch { bad "OpenCode instructions cannot be inspected because opencode.json is invalid" }
 } else { bad "missing $OcJson" }
 
 sec "Canonical bootstrap hygiene (size budget, pointer integrity)"
@@ -616,11 +624,18 @@ if (Get-Command codex -ErrorAction SilentlyContinue) {
 }
 
 sec "OpenCode config"
+if ((Test-Path -LiteralPath $XdgOcJson) -and (Test-Path -LiteralPath $AppDataOcJson)) {
+  warn "two OpenCode configs exist; current XDG config wins and the older APPDATA copy should be reviewed or archived: $AppDataOcJson"
+}
 if (Test-Path -LiteralPath $OcJson) {
   try { Get-Content -Raw -LiteralPath $OcJson | ConvertFrom-Json | Out-Null
     ok "opencode.json: valid JSON"
-    if (Select-String -Quiet -LiteralPath $OcJson -Pattern "opencode(-go)?/deepseek-v4-pro") { ok "default = deepseek-v4-pro via Go" } else { warn "default model is not deepseek-v4-pro (Go)" }
+    ok "OpenCode model/provider profile is host-local; engine sync owns only instructions and MCP"
   } catch { bad "opencode.json: invalid JSON" }
+}
+$LegacySharedOcProfile = Join-Path $Layer "opencode\opencode.json"
+if (Test-Path -LiteralPath $LegacySharedOcProfile) {
+  warn "legacy shared OpenCode model/provider profile is still present at $LegacySharedOcProfile; engine sync owns only instructions and MCP, host-local models must stay in the runtime config"
 }
 
 sec "Local model (host-aware: routing worker only on Windows, tag chosen locally)"
@@ -642,6 +657,30 @@ if ($ollama) {
   }
 } else { warn "ollama not in PATH (local worker unavailable)" }
 
+sec "Claude security posture"
+$settingsPath = Join-Path $HomeDir ".claude\settings.json"
+$settingsLocalPath = Join-Path $HomeDir ".claude\settings.local.json"
+$claudeBypass = $false
+if (Test-Path -LiteralPath $settingsPath) {
+  try {
+    $claudeSettings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
+    $claudeBypass = $claudeSettings.permissions.defaultMode -eq "bypassPermissions"
+    if ($claudeBypass) { warn "Claude defaultMode=bypassPermissions on a networked host; use auto or acceptEdits unless this machine is an isolated sandbox" }
+    else { ok "Claude does not default to bypassPermissions" }
+    if ($claudeSettings.skipDangerousModePermissionPrompt -eq $true) { warn "Claude suppresses the dangerous-mode permission warning" }
+  } catch { warn "Claude settings.json is invalid; permission posture was not checked" }
+}
+if (Test-Path -LiteralPath $settingsLocalPath) {
+  try {
+    $claudeLocalSettings = Get-Content -Raw -LiteralPath $settingsLocalPath | ConvertFrom-Json
+    $persistentAllows = @($claudeLocalSettings.permissions.allow | Where-Object { $_ -is [string] -and $_.Trim() })
+    if ($persistentAllows.Count -gt 0) {
+      $suffix = if ($claudeBypass) { "; they are redundant while bypassPermissions is active" } else { "" }
+      warn "Claude has $($persistentAllows.Count) unmanaged persistent allow rule(s) in settings.local.json$suffix"
+    }
+  } catch { warn "Claude settings.local.json is invalid; persistent permission grants were not checked" }
+}
+
 sec "Claude authentication"
 $claude = Get-Command claude -ErrorAction SilentlyContinue
 if ($claude) {
@@ -659,7 +698,6 @@ if ($claude) {
 else { warn "claude not in PATH (Claude authentication not checked)" }
 
 sec "Claude hooks (vault checkpoint/briefing)"
-$settingsPath = Join-Path $HomeDir ".claude\settings.json"
 if (Test-Path -LiteralPath $settingsPath) {
   try {
     $sj = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json

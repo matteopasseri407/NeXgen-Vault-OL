@@ -50,12 +50,12 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from config_schema import (
+from config_schema import (  # noqa: E402
     ConfigValidationError,
     load_council_config,
     load_mcp_manifest,
     validate_claude_settings,
-)  # noqa: E402
+)
 
 IS_WINDOWS = platform.system() == "Windows"
 HOST_MUTATIONS_DISABLED_ENV = "NEXGEN_DISABLE_HOST_MUTATIONS"
@@ -77,12 +77,16 @@ def _host_mutations_disabled(env: "Env", operation: str) -> bool:
 
 
 def _opencode_config_path(home: Path) -> Path:
-    """Return OpenCode's native config path without using Unix .config on Windows."""
+    """Return the config path used by the installed OpenCode generation."""
     if not IS_WINDOWS:
         return home / ".config" / "opencode" / "opencode.json"
     appdata_path = Path(os.environ.get("APPDATA") or (home / "AppData" / "Roaming")) / "opencode" / "opencode.json"
-    legacy_path = home / ".config" / "opencode" / "opencode.json"
-    return legacy_path if legacy_path.exists() and not appdata_path.exists() else appdata_path
+    xdg_path = home / ".config" / "opencode" / "opencode.json"
+    # Current native OpenCode reports ~/.config/opencode via `opencode debug
+    # paths` on Windows too. APPDATA remains a compatibility fallback only
+    # for an existing older install; preferring it when both files existed
+    # made NeXgen patch a config the CLI no longer read.
+    return xdg_path if xdg_path.exists() or not appdata_path.exists() else appdata_path
 
 HELP_TEXT = """agent_sync modes:
   pull     Pull the KnowledgeVault from the remote and run healthcheck. Does not rewrite CLI runtime files.
@@ -910,20 +914,52 @@ def _sync_opencode_instructions(env: Env, canon: Path) -> None:
         env.log("instructions: opencode.json root is not an object; skipping instructions merge")
         return
     try:
-        canon_entry = "~/" + str(canon.relative_to(env.home))
+        # JSON paths stay slash-stable on every host.  Windows Path.__str__
+        # uses backslashes, while older private templates used forward
+        # slashes; treating those spellings as different loaded AGENTS.md
+        # twice in OpenCode and paid the bootstrap cost twice per session.
+        canon_entry = "~/" + canon.relative_to(env.home).as_posix()
     except ValueError:
-        canon_entry = str(canon)
+        canon_entry = canon.as_posix()
     entries = config.setdefault("instructions", [])
     if not isinstance(entries, list):
         env.log("instructions: opencode.json 'instructions' is not a list; skipping instructions merge")
         return
-    if canon_entry in entries or str(canon) in entries:
+
+    def instruction_identity(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().replace("\\", "/")
+        if normalized.startswith("~/"):
+            normalized = (env.home / normalized[2:]).as_posix()
+        while "//" in normalized and "://" not in normalized:
+            normalized = normalized.replace("//", "/")
+        normalized = normalized.rstrip("/")
+        return normalized.casefold() if IS_WINDOWS else normalized
+
+    canonical_ids = {
+        instruction_identity(canon_entry),
+        instruction_identity(canon.as_posix()),
+    }
+    canonical_ids.discard(None)
+    canonical_seen = False
+    reconciled: list[object] = []
+    for entry in entries:
+        if instruction_identity(entry) in canonical_ids:
+            if not canonical_seen:
+                reconciled.append(canon_entry)
+                canonical_seen = True
+            continue
+        reconciled.append(entry)
+    if not canonical_seen:
+        reconciled.append(canon_entry)
+    if reconciled == entries:
         return
-    entries.append(canon_entry)
+    config["instructions"] = reconciled
     stamp = time.strftime("%Y%m%d-%H%M%S")
     shutil.copy2(oc_path, oc_path.with_name(f"opencode.json.pre-instructions-{stamp}.bak"))
     _atomic_write_text(oc_path, json.dumps(config, indent=2) + "\n")
-    env.log(f"instructions: added canonical AGENTS.md to opencode.json instructions ({oc_path})")
+    env.log(f"instructions: reconciled one canonical AGENTS.md entry in opencode.json ({oc_path})")
 
 
 # ── 2.5 antigravity_mcp ──────────────────────────────────────────────────
@@ -1190,26 +1226,45 @@ def _broadcast_environment_change() -> None:
 def local_model_runtime(env: Env) -> bool:
     if not IS_WINDOWS:
         return True
-    src = env.engine_scripts / "local-model-agent.ps1"
+    # The adapter is deliberately private and machine-specific.  The public
+    # engine owns only the stable local-worker/local-agent capability names;
+    # if a user supplies an adapter, it lives in the private Vault scripts
+    # plane and is never copied into the public product repository.
+    src = env.vault_scripts / "local-model-agent.ps1"
     if not src.is_file():
-        # Not shipped in the public engine by design (bring-your-own, see
-        # LOCAL-WORKER.md) -- absence is the expected default for most
-        # installs, not a failure to surface as a red exit code.
+        # Absence is the expected default for most installs, not a failure.
         env.log(f"local-model: missing source {src} (optional, bring-your-own)")
         return True
     env.local_bin.mkdir(parents=True, exist_ok=True)
     runtime = env.local_bin / "local-model-agent.ps1"
     if make_link(src, runtime, is_dir=False):
         env.log("local-model: relinked local-model-agent.ps1")
+    legacy_wrappers = {
+        "gemma-worker.ps1": "-Mode worker @args",
+        "gemma-agent.ps1": "-Mode agent @args",
+    }
+    for old_name, mode_marker in legacy_wrappers.items():
+        old = env.local_bin / old_name
+        try:
+            old_text = old.read_text(encoding="utf-8") if old.is_file() else ""
+            managed = old.is_symlink() or (
+                old.is_file()
+                and "local-model-agent.ps1" in old_text
+                and mode_marker in old_text
+            )
+        except (OSError, UnicodeDecodeError):
+            managed = False
+        if managed:
+            _remove_path(old)
+            env.log(f"local-model: removed legacy model-specific alias {old_name}")
     for old_name in ("gemma-worker.cmd", "gemma-agent.cmd"):
         old = env.local_bin / old_name
-        if old.exists() or old.is_symlink():
+        if old.is_symlink():
             _remove_path(old)
+            env.log(f"local-model: removed legacy model-specific alias {old_name}")
     wrappers = {
         "local-worker.ps1": "$ScriptPath = Join-Path $PSScriptRoot 'local-model-agent.ps1'\r\n& $ScriptPath -Mode worker @args\r\n",
         "local-agent.ps1": "$ScriptPath = Join-Path $PSScriptRoot 'local-model-agent.ps1'\r\n& $ScriptPath -Mode agent @args\r\n",
-        "gemma-worker.ps1": "$ScriptPath = Join-Path $PSScriptRoot 'local-model-agent.ps1'\r\n& $ScriptPath -Mode worker @args\r\n",
-        "gemma-agent.ps1": "$ScriptPath = Join-Path $PSScriptRoot 'local-model-agent.ps1'\r\n& $ScriptPath -Mode agent @args\r\n",
     }
     changed = False
     for name, content in wrappers.items():
