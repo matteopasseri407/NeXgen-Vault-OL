@@ -593,3 +593,127 @@ def test_install_github_rejects_a_path_traversal_name_called_directly(sandbox):
         apply=True,
     )
     assert not sandbox.skill_library.exists()
+
+
+# ---- cross-CLI command skills: antigravity native view, opencode coverage ----
+# Verified landscape (2026-07-17, primary sources + local installs): Codex and
+# OpenCode read the shared ~/.agents/skills root, OpenCode also reads
+# ~/.claude/skills; Antigravity reads only its own global root
+# ~/.gemini/antigravity-cli/skills. A "command skill" is exposure: core plus
+# the native targets -- no new manifest schema.
+
+
+def _command_manifest(sandbox, targets: str, exposure: str = "core") -> None:
+    (sandbox.skills_dir / "skills.manifest.yaml").write_text(
+        "skills:\n"
+        "  fake-skill-a:\n"
+        "    origin: vault\n"
+        f"    targets: [{targets}]\n"
+        f"    exposure: {exposure}\n",
+        encoding="utf-8",
+    )
+
+
+def test_antigravity_target_gets_a_native_view(sandbox, monkeypatch):
+    """targets: [antigravity] -> per-skill link in the agy global skills root,
+    same pattern as the Claude native lazy view."""
+    _command_manifest(sandbox, "claude, antigravity")
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
+
+    assert mod.main() == 0
+    library = sandbox.skill_library / "fake-skill-a"
+    view = sandbox.home / ".gemini" / "antigravity-cli" / "skills" / "fake-skill-a"
+    assert view.resolve() == library.resolve()
+    assert (sandbox.active_skills / "fake-skill-a").resolve() == library.resolve()
+
+
+def test_antigravity_view_is_not_created_without_the_target(sandbox, monkeypatch):
+    """Default fixture manifest (claude+codex only) must not grow an
+    antigravity view: the fan-out stays opt-in per skill."""
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
+
+    assert mod.main() == 0
+    agy_root = sandbox.home / ".gemini" / "antigravity-cli" / "skills"
+    assert not (agy_root / "fake-skill-a").exists()
+
+
+def test_opencode_target_is_acknowledged_when_discoverable(sandbox, monkeypatch, capsys):
+    """targets: [.., opencode] with exposure core -> no 'unknown target'
+    warning, no native dir: OpenCode reads the shared roots."""
+    _command_manifest(sandbox, "claude, opencode")
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
+
+    assert mod.main() == 0
+    out = capsys.readouterr().out
+    assert "unknown target 'opencode'" not in out
+    assert "opencode: covered" in out
+    assert not (sandbox.home / ".config" / "opencode" / "skills").exists()
+
+
+def test_opencode_only_manual_skill_warns_it_is_not_discoverable(sandbox, monkeypatch, capsys):
+    """targets: [opencode] with exposure manual reaches NO OpenCode discovery
+    root (no ~/.agents/skills entry, no ~/.claude/skills link): warn instead
+    of silently doing nothing."""
+    _command_manifest(sandbox, "opencode", exposure="manual")
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
+
+    assert mod.main() == 0
+    out = capsys.readouterr().out
+    assert "opencode/fake-skill-a: not discoverable" in out
+
+
+def test_opencode_core_only_skill_is_covered_without_claude_target(sandbox, monkeypatch, capsys):
+    """exposure core alone puts the skill in ~/.agents/skills, which OpenCode
+    reads: covered, no warning."""
+    _command_manifest(sandbox, "opencode", exposure="core")
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
+
+    assert mod.main() == 0
+    out = capsys.readouterr().out
+    assert "opencode: covered" in out
+    assert "not discoverable" not in out
+
+
+def test_unknown_target_still_warns(sandbox, monkeypatch, capsys):
+    """Regression guard: targets outside the known set keep the explicit
+    unknown-target warning."""
+    _command_manifest(sandbox, "windsurf")
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
+
+    assert mod.main() == 0
+    out = capsys.readouterr().out
+    assert "unknown target 'windsurf'" in out
+
+
+def test_antigravity_target_warns_on_a_non_portable_skill_name(sandbox, monkeypatch, capsys):
+    """agentskills.io names are lowercase-hyphen and Antigravity requires the
+    frontmatter name to match the folder: a manifest name outside that shape
+    gets a WARN (still linked -- WARN-only, never a behavior change)."""
+    src = sandbox.skills_dir / "fake_skill_b"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "SKILL.md").write_text(
+        "---\ndescription: synthetic underscore-named skill\n---\nbody\n",
+        encoding="utf-8",
+    )
+    (sandbox.skills_dir / "skills.manifest.yaml").write_text(
+        "skills:\n"
+        "  fake_skill_b:\n"
+        "    origin: vault\n"
+        "    targets: [antigravity]\n"
+        "    exposure: core\n",
+        encoding="utf-8",
+    )
+    mod = load_skills_sync_module(sandbox)
+    monkeypatch.setattr(mod.sys, "argv", ["skills-sync.py", "--apply"])
+
+    assert mod.main() == 0
+    out = capsys.readouterr().out
+    assert "not agent-skills portable" in out
+    view = sandbox.home / ".gemini" / "antigravity-cli" / "skills" / "fake_skill_b"
+    assert view.resolve() == (sandbox.skill_library / "fake_skill_b").resolve()

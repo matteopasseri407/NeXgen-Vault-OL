@@ -23,9 +23,12 @@
 #   origin: github  -> third-party, NOT vendored: inventoried here only. Every
 #                      entry needs the FULL commit SHA, so the exact bytes always
 #                      reinstall from the same upstream revision (restorable).
-#   targets:  the runtimes that get a native view of the skill, e.g. [claude].
-#             Codex / OpenCode / Antigravity use the universal `agent-skill
-#             find|show` command instead of a native view.
+#   targets:  the runtimes that surface the skill natively: claude and
+#             antigravity get per-skill views; codex reads core skills from
+#             the shared ~/.agents/skills root; opencode reads the shared
+#             roots too (its target only verifies discoverability). Skills
+#             kept out of every eager view are still reachable through the
+#             universal `agent-skill find|show` command.
 #   exposure: manual (default — invisible to eager runtimes, loaded lazily) or
 #             core (the single exception, visible under ~/.agents/skills).
 #
@@ -36,6 +39,37 @@
 # ============================================================================
 
 skills:
+
+  # --- starter command skills (shipped with the engine) ----------------------
+  # A cross-CLI "command" is just a skill exposed everywhere. The recipe:
+  #   exposure: core          -> lands in ~/.agents/skills, which Codex
+  #                              ("$name" mention) and OpenCode ("/name")
+  #                              read natively.
+  #   targets: [claude]       -> native lazy view for Claude Code ("/name").
+  #   targets: [antigravity]  -> native view in ~/.gemini/antigravity-cli/skills
+  #                              ("/name" in the Antigravity TUI).
+  #   targets: [opencode]     -> writes nothing (OpenCode reads the shared
+  #                              roots); sync only verifies discoverability.
+  # Keep names lowercase-hyphen (agentskills.io shape) and avoid CLI built-in
+  # names: e.g. Claude Code ships a bundled /doctor that a skill named
+  # "doctor" would override -- hence the vault- prefix below.
+  # Write bodies argument-free ("the text after the command is the request"):
+  # placeholder syntaxes like $ARGUMENTS diverge per CLI, plain instructions
+  # work identically on all four.
+  vault-doctor:
+    origin: vault
+    targets: [claude, antigravity, opencode]
+    exposure: core
+
+  vault-close:
+    origin: vault
+    targets: [claude, antigravity, opencode]
+    exposure: core
+
+  vault-save:
+    origin: vault
+    targets: [claude, antigravity, opencode]
+    exposure: core
 
   # --- example: a third-party skill, inventoried by pinned commit ------------
   # humanizer:

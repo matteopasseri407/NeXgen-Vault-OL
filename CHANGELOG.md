@@ -8,6 +8,13 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## Unreleased
+
+### Added
+
+- Cross-CLI command skills: one canonical skill can now surface as an explicitly invocable command on every supported runtime. `skills-sync.py` gains a native `antigravity` runtime view (`~/.gemini/antigravity-cli/skills/`, where a skill appears as a `/name` slash command in the agy TUI) and an `opencode` target that writes nothing but verifies the skill is discoverable through the shared roots OpenCode reads (`~/.agents/skills` and `~/.claude/skills`); Codex keeps discovering `exposure: core` skills through `~/.agents/skills` (`$name` mention). Grounded in a primary-source verification of all four CLIs (2026-07-17): Codex removed classic custom prompts in March 2026, Claude Code merged commands into skills, Antigravity uses markdown skills (not Gemini's TOML commands), and OpenCode surfaces discovered skills as slash commands — every runtime converges on the agentskills.io shape, so a skill is now the one portable command format. A WARN (never a failure) flags manifest names outside the portable lowercase-hyphen shape.
+- Three starter command skills ship with the engine and are registered in `skills.manifest.yaml.example`: `vault-doctor` (run the read-only alignment doctor and explain the result in plain language), `vault-close` (distill the session into durable Vault notes, publish, verify), `vault-save` (save one durable fact with the hygiene decision rule). Bodies are argument-free by design — the text after the command is the request — because placeholder syntaxes diverge per CLI.
+
 ## [0.7.0] - 2026-07-17
 
 New engine tooling on top of the 0.6.0 Beta: per-CLI config `--revert` and `--adopt`, bootstrap-hygiene checks, and a required-invariant-rules drift guard. Maturity stays **Beta** (stability is not yet guaranteed).
