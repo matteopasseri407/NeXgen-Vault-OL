@@ -78,6 +78,12 @@ LEGACY = LIBRARY / "legacy"
 RUNTIME = {
     "claude": HOME / ".claude" / "skills",
     "codex": HOME / ".codex" / "skills",
+    # Antigravity's global skill root: skills placed here surface as /name
+    # slash commands in the agy TUI. Unlike Codex and OpenCode (verified
+    # 2026-07-17 on the official docs + local installs) Antigravity does NOT
+    # read the shared ~/.agents/skills root, so it is the one runtime that
+    # still needs a native per-skill view.
+    "antigravity": HOME / ".gemini" / "antigravity-cli" / "skills",
 }
 IS_WINDOWS = platform.system() == "Windows"
 # Windows directory junctions are reparse points.  On older supported Python
@@ -95,6 +101,11 @@ GIT_CLONE_TIMEOUT_SECONDS = 60
 # not an eager-startup metric and must not be reported as one.
 GIT_COMMIT_SHA = re.compile(r"[0-9a-fA-F]{40}\Z")
 TEAM_MEMBERS_HEADING_RE = re.compile(r"(?im)^##\s+team members\b")
+# agentskills.io portable name shape (lowercase alphanumerics + single
+# hyphens). ENTRY_NAME_RE is deliberately wider (it guards path safety, not
+# portability); names outside this shape may be ignored by spec-conformant
+# runtimes such as Antigravity, so the antigravity branch warns on them.
+AGENT_SKILL_NAME_RE = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*\Z")
 
 PASS = WARN = ACT = FAILN = 0
 
@@ -814,7 +825,11 @@ def main() -> int:
         # 3) Claude may see all declared native-lazy views. Codex discovers
         # core skills through the official shared root above; do not mirror
         # them into the legacy ~/.codex/skills root or Codex will catalog the
-        # same skill twice. Other runtimes use the universal command/catalog.
+        # same skill twice. OpenCode reads both shared roots (~/.agents/skills
+        # and ~/.claude/skills), so its target never writes anything: it only
+        # verifies the skill is actually discoverable there. Antigravity reads
+        # neither shared root and gets a native per-skill view in its global
+        # skills dir, where the skill surfaces as a /name slash command.
         for t in targets:
             if t == "claude":
                 if claude_is_library_link:
@@ -823,6 +838,21 @@ def main() -> int:
                     ensure_link(LIBRARY / name, RUNTIME["claude"] / name, apply, f"claude/{name}")
             elif t == "codex":
                 ensure_absent_link(RUNTIME["codex"] / name, apply, f"codex-legacy/{name}")
+            elif t == "antigravity":
+                if not AGENT_SKILL_NAME_RE.fullmatch(name):
+                    warn(
+                        f"antigravity/{name}: name is not agent-skills portable "
+                        "(lowercase-hyphen); the agy TUI may not surface it"
+                    )
+                ensure_link(LIBRARY / name, RUNTIME["antigravity"] / name, apply, f"antigravity/{name}")
+            elif t == "opencode":
+                if exposure == "core" or "claude" in targets:
+                    ok("opencode: covered (reads the shared skills roots; no native view needed)")
+                else:
+                    warn(
+                        f"opencode/{name}: not discoverable -- needs exposure 'core' or a "
+                        "'claude' target (OpenCode reads ~/.agents/skills and ~/.claude/skills)"
+                    )
             else:
                 warn(f"unknown target '{t}'")
 

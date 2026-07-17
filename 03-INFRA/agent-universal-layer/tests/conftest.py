@@ -250,6 +250,7 @@ def load_skills_sync_module(sandbox: Sandbox):
     mod.RUNTIME = {
         "claude": sandbox.home / ".claude" / "skills",
         "codex": sandbox.home / ".codex" / "skills",
+        "antigravity": sandbox.home / ".gemini" / "antigravity-cli" / "skills",
     }
     return mod
 
