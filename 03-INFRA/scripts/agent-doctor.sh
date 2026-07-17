@@ -754,6 +754,22 @@ if [ "$HOST" = linux ]; then
   fi
 fi
 
+sec "Claude authentication"
+if command -v claude >/dev/null 2>&1; then
+  claude_auth="$(claude auth status 2>/dev/null || true)"
+  if printf '%s' "$claude_auth" | grep -Eq '"loggedIn"[[:space:]]*:[[:space:]]*true'; then
+    ok "Claude authentication is active"
+  elif printf '%s' "$claude_auth" | grep -Eq '"loggedIn"[[:space:]]*:[[:space:]]*false'; then
+    fail "Claude is not authenticated; run: claude auth login"
+  elif [ -n "$claude_auth" ]; then
+    warn "Claude auth status returned unreadable output; run: claude auth status"
+  else
+    warn "Claude auth status returned no output; run: claude auth status"
+  fi
+else
+  warn "claude not in PATH (Claude authentication not checked)"
+fi
+
 sec "Claude hooks (vault checkpoint/briefing)"
 SETTINGS="$HOME/.claude/settings.json"
 if [ -f "$SETTINGS" ]; then

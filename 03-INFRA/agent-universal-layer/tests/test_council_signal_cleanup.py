@@ -104,6 +104,69 @@ def test_cleanup_kills_process_that_ignores_terminate(monkeypatch, tmp_path):
     assert proc.kill_calls == 1
 
 
+def test_force_stop_process_tree_uses_taskkill_for_a_windows_shim(monkeypatch, tmp_path):
+    """Killing only cmd.exe leaves the npm child alive long enough to keep
+    Codex's SQLite files locked. Windows timeouts must terminate the whole
+    descendant tree before Council tries to remove the session directory."""
+    council = load_council(monkeypatch, tmp_path)
+    calls = []
+
+    class FakeWindowsProc:
+        pid = 4242
+
+        def __init__(self):
+            self.wait_calls = 0
+            self.kill_calls = 0
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            return 0
+
+        def kill(self):
+            self.kill_calls += 1
+
+    proc = FakeWindowsProc()
+    monkeypatch.setattr(council.os, "name", "nt")
+    monkeypatch.setattr(
+        council.subprocess,
+        "run",
+        lambda argv, **kwargs: calls.append((argv, kwargs)) or subprocess.CompletedProcess(argv, 0),
+    )
+
+    council._force_stop_process_tree(proc)
+
+    assert calls[0][0] == ["taskkill.exe", "/PID", "4242", "/T", "/F"]
+    assert proc.wait_calls == 1
+    assert proc.kill_calls == 0
+
+
+def test_finalize_session_retries_a_transient_windows_file_lock(monkeypatch, tmp_path, capsys):
+    """Even after taskkill returns, NTFS may briefly report WinError 32 while
+    the child's SQLite handle is closing. A bounded retry must clean the
+    ephemeral session instead of leaving it behind as a false hard failure."""
+    council = load_council(monkeypatch, tmp_path)
+    session_dir = tmp_path / "sessions" / "council-transient-lock"
+    session_dir.mkdir(parents=True)
+    calls = []
+
+    def flaky_rmtree(path):
+        calls.append(path)
+        if len(calls) == 1:
+            raise PermissionError(32, "simulated transient Windows lock", str(path))
+
+    monkeypatch.setattr(council.os, "name", "nt")
+    monkeypatch.setattr(council.shutil, "rmtree", flaky_rmtree)
+    monkeypatch.setattr(council.time, "sleep", lambda seconds: None)
+
+    council._finalize_session(session_dir, keep_session=False)
+
+    assert len(calls) == 2
+    assert "cleanup della sessione fallito" not in capsys.readouterr().out
+
+
 def test_cleanup_preserves_kept_session_dir(monkeypatch, tmp_path):
     council = load_council(monkeypatch, tmp_path)
     session_dir = tmp_path / "sessions" / "council-kept"

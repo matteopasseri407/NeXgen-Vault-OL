@@ -71,3 +71,21 @@ def test_list_and_find_use_multiline_frontmatter_description(sandbox):
     found = _run(sandbox, "find", "focused", "lookup")
     assert found.returncode == 0
     assert "multiline-skill" in found.stdout
+
+
+def test_show_forces_utf8_even_when_windows_code_page_is_not_utf8(sandbox):
+    skill = sandbox.skill_library / "unicode-skill"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("Perché: sorgente → destinazione.\n", encoding="utf-8")
+    env = sandbox.env()
+    env["PYTHONIOENCODING"] = "cp1252"
+
+    shown = subprocess.run(
+        [sys.executable, str(sandbox.scripts_dir / "agent-skill.py"), "show", "unicode-skill"],
+        env=env,
+        capture_output=True,
+        timeout=20,
+    )
+
+    assert shown.returncode == 0, shown.stderr.decode("utf-8", errors="replace")
+    assert shown.stdout.decode("utf-8").splitlines() == ["Perché: sorgente → destinazione."]

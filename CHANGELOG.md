@@ -8,6 +8,17 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## [0.91.1] - 2026-07-17
+
+Windows reliability fixes found during the 0.91 cutover. This patch restores Unicode-safe commands, corrects engine-owned launcher targets after the engine and data split, and makes an expired Claude session visible in the doctor.
+
+### Fixed
+
+- Council now writes Codex prompts to stdin as UTF-8. Timeout cleanup terminates the full Windows process tree and retries short NTFS lock failures before removing an ephemeral session.
+- `agent-skill` forces UTF-8 on stdout and stderr, so skill bodies containing Italian text or Unicode symbols print correctly on legacy Windows code pages.
+- Generated `vault-push` and `vault-groom` launchers now target the consumer engine. They no longer point at incomplete frozen copies in the data-only Vault after cutover.
+- `agent-doctor` checks `claude auth status` on both Windows and POSIX hosts. An installed but logged-out Claude CLI is now a failure with `claude auth login` as the recovery command.
+
 ## [0.91.0] - 2026-07-17
 
 Link hygiene for the memory plane, end to end: a deterministic structural map of the vault (broken wikilinks, orphans, hubs) wired as discipline into the flows — grooming candidates, a write-time advisory on every memory write, an orientation tool for agents, a seventh starter command — rather than as another periodic check. The version jump (0.9 → 0.91) signals proximity to a stable line, not 91 intermediate releases. Maturity stays **Beta** (stability is not yet guaranteed).

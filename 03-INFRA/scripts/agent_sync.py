@@ -962,6 +962,9 @@ def antigravity_mcp(env: Env) -> bool:
 # them -- a hardcoded list in one branch is exactly the kind of place a new
 # command silently falls through the cracks of.
 #   source:   'engine' -> env.engine_scripts, 'vault' -> env.vault_scripts.
+#     Executable utilities belong to the engine even when they mutate Vault
+#     data: after the engine/data split, a Vault-side wrapper has no sibling
+#     agent_sync.py and cannot run the authoritative implementation.
 #   posix/windows: whether a same-named <name>.sh / <name>.ps1 twin ships
 #     and should be linked on that OS (vault-ocr-local remains POSIX-only by
 #     design, while firecrawl-local ships a native .ps1 twin).
@@ -977,8 +980,8 @@ LINKED_COMMANDS: dict[str, dict[str, object]] = {
     "agent-now":       {"source": "engine", "posix": True,  "windows": True},
     "council":         {"source": "engine", "posix": True,  "windows": True},
     "firecrawl-local": {"source": "engine", "posix": True,  "windows": True},
-    "vault-push":      {"source": "vault",  "posix": True,  "windows": True},
-    "vault-groom":     {"source": "vault",  "posix": True,  "windows": True},
+    "vault-push":      {"source": "engine", "posix": True,  "windows": True},
+    "vault-groom":     {"source": "engine", "posix": True,  "windows": True},
     "vault-ocr-local": {"source": "vault",  "posix": True,  "windows": False, "optional": True},
 }
 

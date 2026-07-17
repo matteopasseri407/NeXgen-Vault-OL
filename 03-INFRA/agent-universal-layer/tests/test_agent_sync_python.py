@@ -1340,6 +1340,34 @@ def test_windows_utils_installs_vault_push_command_wrapper(sandbox, monkeypatch)
     assert "vault-push.ps1" in wrapper.read_text(encoding="utf-8")
 
 
+def test_windows_utils_sources_engine_owned_vault_commands_after_split(sandbox, monkeypatch, tmp_path):
+    """After the engine/data cutover the Vault no longer owns runtime code.
+    Launchers aimed at stale Vault copies either lose their sibling engine or
+    silently execute a pre-cutover implementation instead of the pinned one."""
+    mod = load_agent_sync_module(sandbox)
+    monkeypatch.setattr(mod, "IS_WINDOWS", True)
+    monkeypatch.setenv("HOME", str(sandbox.home))
+    monkeypatch.setenv("USERPROFILE", str(sandbox.home))
+    monkeypatch.setenv("KNOWLEDGE_VAULT_PATH", str(sandbox.vault))
+    monkeypatch.setitem(sys.modules, "winreg", _make_fake_winreg())
+
+    engine_root = tmp_path / "consumer-engine" / "03-INFRA"
+    engine_scripts = engine_root / "scripts"
+    engine_scripts.mkdir(parents=True)
+    for name in ("vault-push.ps1", "vault-groom.ps1", "vault_groom_audit.py", "agent_sync.py"):
+        shutil.copy2(REAL_SCRIPTS / name, engine_scripts / name)
+    monkeypatch.setenv("AGENT_ENGINE_ROOT", str(engine_root))
+
+    env = mod.Env()
+    mod.utils(env)
+
+    for command in ("vault-push", "vault-groom"):
+        launcher = sandbox.home / ".local" / "bin" / f"{command}.ps1"
+        launcher_text = launcher.read_text(encoding="utf-8")
+        assert str(engine_scripts / f"{command}.ps1") in launcher_text
+        assert str(sandbox.scripts_dir / f"{command}.ps1") not in launcher_text
+
+
 # ── _run_external timeout primitive (2026-07-13 follow-up) ────────────────
 # Mirrors _run_python_script's own TimeoutExpired-swallowing test above:
 # mklink/pgrep/tasklist/systemctl/schtasks.exe/notify-send now all route

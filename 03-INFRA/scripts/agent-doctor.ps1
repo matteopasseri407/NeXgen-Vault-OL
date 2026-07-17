@@ -642,6 +642,22 @@ if ($ollama) {
   }
 } else { warn "ollama not in PATH (local worker unavailable)" }
 
+sec "Claude authentication"
+$claude = Get-Command claude -ErrorAction SilentlyContinue
+if ($claude) {
+  $claudeAuthRaw = ((& claude auth status 2>$null) -join "`n").Trim()
+  if ($claudeAuthRaw) {
+    try {
+      $claudeAuth = $claudeAuthRaw | ConvertFrom-Json
+      if ($claudeAuth.loggedIn -eq $true) { ok "Claude authentication is active" }
+      else { bad "Claude is not authenticated; run: claude auth login" }
+    }
+    catch { warn "Claude auth status returned unreadable output; run: claude auth status" }
+  }
+  else { warn "Claude auth status returned no output; run: claude auth status" }
+}
+else { warn "claude not in PATH (Claude authentication not checked)" }
+
 sec "Claude hooks (vault checkpoint/briefing)"
 $settingsPath = Join-Path $HomeDir ".claude\settings.json"
 if (Test-Path -LiteralPath $settingsPath) {

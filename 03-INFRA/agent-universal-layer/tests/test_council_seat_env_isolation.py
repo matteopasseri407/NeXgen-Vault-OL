@@ -245,3 +245,57 @@ def test_run_seat_leaves_claude_env_as_none_meaning_full_inherit(monkeypatch, tm
     council.run_seat({"cli": "claude", "model": "vendor/test"}, "prompt", tmp_path)
 
     assert captured["env"] is None
+
+
+def test_run_seat_forces_utf8_text_pipes_for_non_ascii_codex_prompt(monkeypatch, tmp_path):
+    """Windows defaults subprocess text pipes to the active ANSI code page.
+    Codex requires UTF-8 on ``codex exec -`` stdin, so an Italian prompt must
+    never be encoded through cp1252 (or any other locale-dependent codec)."""
+    council = load_council(monkeypatch, tmp_path)
+    captured = {}
+
+    class FakeStdin:
+        def __init__(self):
+            self.text = ""
+
+        def write(self, text):
+            self.text += text
+
+        def flush(self):
+            return None
+
+        def close(self):
+            return None
+
+    class FakeProcess:
+        def __init__(self, argv):
+            import io
+
+            self.stdin = FakeStdin()
+            captured["stdin"] = self.stdin
+            self.stdout = io.StringIO("codex started\n")
+            self.stderr = io.StringIO()
+            output_path = Path(argv[argv.index("-o") + 1])
+            output_path.write_text("Risposta valida\n", encoding="utf-8")
+
+        def kill(self):
+            return None
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(argv, **kwargs):
+        captured["popen_kwargs"] = kwargs
+        return FakeProcess(argv)
+
+    monkeypatch.setattr(council.subprocess, "Popen", fake_popen)
+
+    response, _usage = council.run_seat(
+        {"cli": "codex", "model": "vendor/test"},
+        "Perché è importante?",
+        tmp_path,
+    )
+
+    assert response == "Risposta valida\n"
+    assert captured["stdin"].text == "Perché è importante?"
+    assert captured["popen_kwargs"]["encoding"] == "utf-8"

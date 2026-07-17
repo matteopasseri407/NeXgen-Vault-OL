@@ -153,6 +153,48 @@ def _windows_command_argv(argv: list[str]) -> list[str]:
     return [executable, *argv[1:]]
 
 
+def _force_stop_process_tree(proc: "subprocess.Popen") -> None:
+    """Force-stop a seat and reap its launcher.
+
+    On Windows an npm ``.cmd`` shim is launched through ``cmd.exe``. Killing
+    only that parent can leave the Node/Codex child alive with SQLite handles
+    open inside the Council session directory. ``taskkill /T`` terminates the
+    exact descendant tree rooted at the launcher PID; other platforms keep
+    the existing single-process kill behavior.
+    """
+    used_windows_tree_kill = False
+    pid = getattr(proc, "pid", None)
+    if os.name == "nt" and pid is not None:
+        try:
+            result = subprocess.run(
+                ["taskkill.exe", "/PID", str(pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            )
+            used_windows_tree_kill = result.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    if not used_windows_tree_kill:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+    try:
+        proc.wait(timeout=5)
+    except TypeError:  # lightweight test doubles may not accept timeout
+        proc.wait()
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
 @dataclass
 class RelayStage:
     role: str
@@ -892,13 +934,26 @@ def _cleanup_sessions(ttl_days: int, *, remove_all: bool = False, announce: bool
     return removed
 
 
+def _remove_session_tree(session_dir: Path) -> OSError | None:
+    """Remove an ephemeral session, tolerating short NTFS handle-release lag."""
+    retry_delays = (0.05, 0.1, 0.2, 0.4, 0.8) if os.name == "nt" else ()
+    for attempt in range(len(retry_delays) + 1):
+        try:
+            shutil.rmtree(session_dir)
+            return None
+        except OSError as exc:
+            if attempt >= len(retry_delays):
+                return exc
+            time.sleep(retry_delays[attempt])
+    return None
+
+
 def _finalize_session(session_dir: Path, keep_session: bool) -> None:
     if keep_session:
         _secure_session_tree(session_dir)
         return
-    try:
-        shutil.rmtree(session_dir)
-    except OSError as exc:
+    exc = _remove_session_tree(session_dir)
+    if exc is not None:
         print(f"[council] ATTENZIONE: cleanup della sessione fallito ({exc}).")
 
 
@@ -973,15 +1028,18 @@ def _best_effort_cleanup(*_args) -> None:
     if proc is not None:
         try:
             if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+                if os.name == "nt" and getattr(proc, "pid", None) is not None:
+                    _force_stop_process_tree(proc)
+                else:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        _force_stop_process_tree(proc)
         except Exception:
             pass
     if session_dir is not None and not keep:
-        shutil.rmtree(session_dir, ignore_errors=True)
+        _remove_session_tree(session_dir)
 
 
 def _handle_sigterm(signum, frame) -> None:  # pragma: no cover - exercised via _best_effort_cleanup
@@ -1399,6 +1457,11 @@ def run_seat(
                 stderr=subprocess.PIPE,
                 stdin=subprocess.PIPE if invocation.stdin_text is not None else subprocess.DEVNULL,
                 text=True,
+                # Windows otherwise uses the active ANSI code page (commonly
+                # cp1252) for text pipes. Codex requires UTF-8 on
+                # ``codex exec -`` stdin, and every other Council seat accepts
+                # UTF-8, so keep the shared transport deterministic.
+                encoding="utf-8",
                 # None => inherit os.environ (claude, ollama, unchanged).
                 # dict => exactly that environment, nothing else (codex,
                 # agy, opencode). See _isolated_seat_env.
@@ -1431,8 +1494,7 @@ def run_seat(
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                proc.kill()
-                proc.wait()
+                _force_stop_process_tree(proc)
                 if not got_any_line:
                     raise SeatRunError(
                         f"[council] il seat '{model}' non ha risposto entro {timeout_label}s "
@@ -1462,8 +1524,7 @@ def run_seat(
                 except json.JSONDecodeError:
                     continue
                 if event.get("type") == "error":
-                    proc.kill()
-                    proc.wait()
+                    _force_stop_process_tree(proc)
                     raise SeatRunError(f"[council] errore dal seat: {event.get('error')}", "seat_error")
                 part = event.get("part") or {}
                 if event.get("type") == "text" and "text" in part:

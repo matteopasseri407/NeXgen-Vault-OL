@@ -20,6 +20,14 @@ LIBRARY = HOME / ".agents" / "skill-library"
 NAME = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
 
 
+def _force_utf8_streams() -> None:
+    """Keep Unicode skill bodies printable on legacy Windows code pages."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def _description(skill_md: Path) -> str:
     """Return a compact, dependency-free frontmatter description."""
     try:
@@ -130,6 +138,7 @@ def cmd_path(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    _force_utf8_streams()
     parser = argparse.ArgumentParser(
         description="Find and load one managed agent skill without exposing the whole library at startup."
     )
