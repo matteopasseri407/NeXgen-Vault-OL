@@ -8,6 +8,12 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## [Unreleased]
+
+### Added
+
+- `vault-map`: a deterministic, read-only, stdlib-only structural map of the vault's wikilink graph (`03-INFRA/scripts/vault-map.py`) reporting broken links (a renamed note leaves dead links behind), orphan notes, and hub notes. Resolution semantics mirror the vault-library MCP server (path, unique stem, note title) so the map and the MCP never contradict each other; targets under `99-SECRETS` or existing non-markdown assets are valid-but-excluded, never "broken"; links from generated indexes are ignored for orphan/hub purposes but still checked for brokenness. Wired proactively into the flows rather than left as a periodic check: the `vault-groom` propose pass (both twins) now runs the map and treats orphans and broken links as first-class tranche candidates, `agent-doctor` (both twins) gains a WARN-only backstop line, and a seventh starter command skill `vault-map` explains the map in plain language and proposes fixes without applying them.
+
 ## [0.9.0] - 2026-07-17
 
 Section-level memory editing: the bundled `vault-library` MCP server gains surgical per-section writes under a per-section compare-and-swap, shrinking diffs and the concurrent-write collision window. Maturity stays **Beta** (stability is not yet guaranteed).

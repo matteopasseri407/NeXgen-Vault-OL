@@ -86,6 +86,11 @@ skills:
     targets: [claude, antigravity, opencode]
     exposure: core
 
+  vault-map:
+    origin: vault
+    targets: [claude, antigravity, opencode]
+    exposure: core
+
   # --- example: a third-party skill, inventoried by pinned commit ------------
   # humanizer:
   #   origin: github

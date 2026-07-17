@@ -188,7 +188,7 @@ $WriteTools = @(
   'mcp__vault-library__append_note'
 )
 
-$ProposePrompt = "Read $Playbook and execute ONLY steps 1-3 (orient, run the audit heat-map, find candidates with semantic_search). Then OUTPUT a proposed grooming tranche as a markdown table with EXACTLY these columns: | Nota | Azione | Perché | - one row per note, action is compress / merge / archive / fix-frontmatter / nessuna azione, last column is one line of why. DO NOT edit, write, move, or commit anything - this is a read-only planning pass."
+$ProposePrompt = "Read $Playbook and execute ONLY steps 1-3 (orient, run the audit heat-map, find candidates with semantic_search). ALSO run the structural map, python $(Join-Path $PSScriptRoot 'vault-map.py') --vault $Vault --check, and treat orphan notes and broken wikilinks it reports as first-class tranche candidates (orphan -> link-or-archive, broken link -> fix at the source). Then OUTPUT a proposed grooming tranche as a markdown table with EXACTLY these columns: | Nota | Azione | Perché | - one row per note, action is compress / merge / archive / fix-frontmatter / fix-link / nessuna azione, last column is one line of why. DO NOT edit, write, move, or commit anything - this is a read-only planning pass."
 
 function Resolve-CliInvoker([string]$Name) {
   # Prefer whichever of Get-Command's matches is NOT a cmd.exe indirection:

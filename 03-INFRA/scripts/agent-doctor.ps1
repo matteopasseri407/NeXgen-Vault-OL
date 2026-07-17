@@ -229,6 +229,22 @@ if (Test-Path -LiteralPath $Canon) {
   warn "canonical AGENTS.md not found, skipping bootstrap hygiene checks"
 }
 
+# Vault-wide wikilink integrity backstop (WARN-only, like every hygiene
+# check): the primary anti-rot mechanisms are the write-time advisory and
+# the groom preview map; this only catches what slips through. Skips
+# silently when python or the script is unavailable.
+$mapScript = Join-Path $PSScriptRoot "vault-map.py"
+if ($NexgenPython -and (Test-Path -LiteralPath $mapScript)) {
+  $mapLine = (& $NexgenPythonCommand @NexgenPythonPrefix $mapScript --vault $Vault --check 2>$null | Select-Object -First 1)
+  if (-not $mapLine) {
+    warn "vault-map backstop could not analyze the vault"
+  } elseif (" $mapLine " -match ' broken=0 ') {
+    ok "vault wikilinks all resolve ($mapLine)"
+  } else {
+    warn "broken wikilink(s) in the vault ($mapLine) - a renamed note leaves dead links behind; run vault-map.py for the list"
+  }
+}
+
 sec "Deterministic agent utilities"
 $agentNow = Get-Command agent-now -ErrorAction SilentlyContinue
 if (-not $agentNow) {

@@ -246,6 +246,23 @@ else
   warn "canonical AGENTS.md not found, skipping bootstrap hygiene checks"
 fi
 
+# Vault-wide wikilink integrity backstop (WARN-only, like every hygiene
+# check): the primary anti-rot mechanisms are the write-time advisory and
+# the groom preview map; this only catches what slips through. Skips
+# silently when python3 or the script is unavailable.
+MAP_SCRIPT="$SELF_DIR/vault-map.py"
+if [ -f "$MAP_SCRIPT" ] && command -v python3 >/dev/null 2>&1; then
+  map_line="$(python3 "$MAP_SCRIPT" --vault "$VAULT_DATA" --check 2>/dev/null | head -n 1)"
+  if [ -z "$map_line" ]; then
+    warn "vault-map backstop could not analyze the vault"
+  else
+    case " $map_line " in
+      *" broken=0 "*) ok "vault wikilinks all resolve ($map_line)" ;;
+      *) warn "broken wikilink(s) in the vault ($map_line) -- a renamed note leaves dead links behind; run: python3 $MAP_SCRIPT --vault $VAULT_DATA" ;;
+    esac
+  fi
+fi
+
 sec "Deterministic agent utilities"
 if command -v agent-now >/dev/null 2>&1; then
   now_payload="$(agent-now --json 2>/dev/null || true)"

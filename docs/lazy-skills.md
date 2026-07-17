@@ -83,7 +83,7 @@ argument-free — "the text after the command is the request" — because
 placeholder syntaxes like `$ARGUMENTS` diverge per CLI while plain
 instructions behave identically on all four.
 
-The engine ships six starter command skills, registered in
+The engine ships seven starter command skills, registered in
 `skills.manifest.yaml.example`: `vault-doctor` (run the alignment doctor and
 explain it in plain language), `vault-close` (distill the session into the
 Vault, publish, verify), `vault-save` (save one durable fact with the
@@ -91,8 +91,11 @@ hygiene decision rule), `vault-council` (convene the AI Council on a
 question, confirming before it spends the seats' quota), `vault-groom` (one
 grooming pass, preview-first; apply keeps all of its own guardrails), and
 `vault-update` (check for a newer engine release, upgrade only on explicit
-confirmation, verify with the doctor). Each body encodes the documented
-runbook of the tool it wraps — the guarded flows stay guarded.
+confirmation, verify with the doctor), and `vault-map` (the deterministic
+structural map of the vault — broken wikilinks, orphan notes, hubs —
+explained in plain language, fixes proposed but never applied without
+confirmation). Each body encodes the documented runbook of the tool it
+wraps — the guarded flows stay guarded.
 
 ## Synchronization and migration
 

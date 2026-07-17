@@ -186,7 +186,7 @@ WRITE_TOOLS=(Read Edit Write Grep Glob \
   mcp__vault-library__update_note mcp__vault-library__create_note \
   mcp__vault-library__append_note)
 
-PROPOSE_PROMPT="Read $PLAYBOOK and execute ONLY steps 1-3 (orient, run the audit heat-map, find candidates with semantic_search). Then OUTPUT a proposed grooming tranche as a markdown table with EXACTLY these columns: | Nota | Azione | Perché | -- one row per note, action is compress / merge / archive / fix-frontmatter / nessuna azione, last column is one line of why. DO NOT edit, write, move, or commit anything -- this is a read-only planning pass."
+PROPOSE_PROMPT="Read $PLAYBOOK and execute ONLY steps 1-3 (orient, run the audit heat-map, find candidates with semantic_search). ALSO run the structural map, python3 $SCRIPT_DIR/vault-map.py --vault $VAULT --check, and treat orphan notes and broken wikilinks it reports as first-class tranche candidates (orphan -> link-or-archive, broken link -> fix at the source). Then OUTPUT a proposed grooming tranche as a markdown table with EXACTLY these columns: | Nota | Azione | Perché | -- one row per note, action is compress / merge / archive / fix-frontmatter / fix-link / nessuna azione, last column is one line of why. DO NOT edit, write, move, or commit anything -- this is a read-only planning pass."
 
 invoke_readonly() {
   local prompt="$1" logfile="$2"
