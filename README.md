@@ -6,7 +6,7 @@
 
 **Configure Claude Code, Codex, OpenCode, and Antigravity from one Git repo you can diff and revert.**
 
-NeXgen Engine is a Git-based framework for managing shared instructions, tool configuration, and version-controlled working memory across AI tools such as Claude Code. It supports software projects as well as notes, research, and professional documents. The project is currently in Beta, with `v0.6.0` as the latest release.
+NeXgen Engine is a Git-based framework for managing shared instructions, tool configuration, and version-controlled working memory across AI tools such as Claude Code. It supports software projects as well as notes, research, and professional documents. The project is currently in Beta; the version badge above always points at the latest release.
 
 Instructions, generated tool configuration, configuration checks, secrets guidance, and shared memory are stored as plain files in a Git repository rather than in a hosted service.
 
@@ -49,8 +49,10 @@ It does not intercept tool calls at runtime.
 
 ## Core concepts
 
-- **Configuration as code for AI tools.** Manifest files define tools, permissions, and behavior. The Python script `agent_sync.py` generates the configuration required by each supported CLI.
-- **Version-controlled memory.** The agents read and write Markdown files. Every change is stored in Git, can be reviewed with a diff, and can be reverted.
+- **Configuration as code for AI tools.** Manifest files define tools, permissions, and behavior. The Python script `agent_sync.py` generates the configuration required by each supported CLI, with `--revert` (undo a CLI's config from its own backup) and `--adopt` (read-only draft manifest entries for servers it finds outside the manifest).
+- **Version-controlled memory.** The agents read and write Markdown files. Every change is stored in Git, can be reviewed with a diff, and can be reverted. Writes are compare-and-swap: whole-note, or per-section (`update_section`), so two agents editing different sections of the same note both land instead of colliding.
+- **Link hygiene as discipline.** A deterministic, stdlib-only structural map of the vault (`vault-map`: broken wikilinks with relocation hints, orphan notes, hubs) is wired into the flows rather than left as a periodic check: every memory write returns an advisory list of unresolved wikilinks it just introduced (never blocking — deliberate forward links are legitimate), the grooming pass treats orphans and broken links as first-class cleanup candidates, `agent-doctor` keeps a warn-only backstop, and a read-only `map_overview` tool gives agents a token-bounded compass before broad tasks.
+- **Cross-CLI command skills.** Declare a skill once and it surfaces as an explicitly invocable command on every supported runtime (`/name`, `$name` on Codex). Seven starter commands ship with the engine: `vault-doctor`, `vault-close`, `vault-save`, `vault-council`, `vault-groom`, `vault-update`, and `vault-map`.
 - **Vault grooming, optional and manual.** `vault-groom.sh` and `vault-groom.ps1` use an LLM and a grooming playbook to flag stale, duplicate, or disconnected notes. A normal run and `preview` are read-only. `apply` shows the proposed changes and requires an explicit `yes` before writing in a disposable clone with no remote. An audit compares the result with the approved changes before promotion. If the audit fails, the original vault is left untouched. An optional n8n workflow sends a reminder every 14 days, but it never runs grooming unattended.
 - **AI Council, Beta.** The local orchestrator `council.py` coordinates multiple models for brainstorming and relay tasks. The routing logic is implemented in Python, with explicit human selection of seats and models.
 - **Configuration checks.** In MULTI profile, `agent-doctor` runs more than 30 read-only checks against the live configuration, vault wiring, skills, and secrets handling. It reports `pass`, `warn`, or `fail` for each check and returns a non-zero exit code when it finds an error. In MINIMAL, a single tool on a single machine is checked directly and no doctor is installed.
@@ -93,7 +95,7 @@ The project focuses on configuration, versioned memory, and safety checks above 
 
 If you mainly need to fan one set of rules and MCP config out to many tools, [ruler](https://github.com/intellectronica/ruler) and [rulesync](https://github.com/dyoshikawa/rulesync) are more mature and render to roughly 30 targets, including the four CLIs NeXgen supports. Start there if config fan-out is all you want. If you want Markdown memory an agent can read and write, [Cline's Memory Bank](https://github.com/cline/cline) convention and [basic-memory](https://github.com/basicmachines-co/basic-memory) popularized that idea and are further along.
 
-NeXgen Engine sits where those two ideas meet, and adds one thing on the memory side. It renders MCP config per CLI *and* keeps working memory as plain Markdown in Git, where every write is a compare-and-swap: the memory server rejects a replace unless the caller's SHA-256 hash matches the current file, and each accepted write lands as its own Git commit. That vault, the per-tool config, and a single AGENTS.md are carried between machines by a fail-closed sync, with a doctor that reports drift between the canonical source and the generated files.
+NeXgen Engine sits where those two ideas meet, and adds one thing on the memory side. It renders MCP config per CLI *and* keeps working memory as plain Markdown in Git, where every write is a compare-and-swap: the memory server rejects a replace unless the caller's SHA-256 hash matches the current content — whole-note, or a single heading's section, so concurrent edits to different parts of one note both land — and each accepted write is its own Git commit that also reports any dead wikilinks it just introduced. That vault, the per-tool config, and a single AGENTS.md are carried between machines by a fail-closed sync, with a doctor that reports drift between the canonical source and the generated files, and a deterministic link-hygiene map over the memory itself.
 
 It is a solo project under a noncommercial license, Linux stable and Windows in beta. It does not claim to be first at any of these pieces: the reason to look is the specific combination, and the write discipline on the memory.
 
@@ -170,12 +172,12 @@ This project is free to use. Some optional links (like the OpenCode one above) a
 
 ---
 
-# NeXgen Engine, versione italiana, Beta, v0.6.0
+# NeXgen Engine, versione italiana, Beta
 
 **Configura Claude Code, Codex, OpenCode e Antigravity da un unico repo Git che puoi diffare e revertare.**
 
 NeXgen Engine è un framework basato su Git per gestire istruzioni condivise, configurazione dei tool e memoria di lavoro versionata tra più strumenti AI, come Claude Code.
-Il progetto è ora in fase Beta, con `v0.6.0` come release più recente.
+Il progetto è in fase Beta; il badge a inizio pagina indica sempre la release più recente.
 Può essere usato per progetti software, note, ricerca e documenti professionali.
 
 Le istruzioni, la configurazione generata dei tool, i controlli sulle differenze, le regole per i segreti e la memoria condivisa sono file di testo dentro un repository Git, non dati conservati in un servizio ospitato.
@@ -225,9 +227,12 @@ I controlli a runtime spettano all'harness della CLI, con i suoi permessi e le r
 ## Concetti base
 
 - **Infrastruttura come codice per gli agenti.** I manifest descrivono tool, permessi e regole di comportamento.
-  Lo script Python unificato `agent_sync.py` genera poi il file di configurazione corretto per ogni CLI.
+  Lo script Python unificato `agent_sync.py` genera poi il file di configurazione corretto per ogni CLI, con `--revert` (ripristino della config di una CLI dal suo backup) e `--adopt` (bozze read-only di voci manifest per i server trovati fuori dal manifest).
 - **Memoria versionata in Git.** Gli agenti leggono e scrivono file Markdown.
   Ogni modifica entra nella storia del repository, si può controllare con un diff e si può annullare.
+  Le scritture sono compare-and-swap: a nota intera oppure per singola sezione (`update_section`), così due agenti che modificano sezioni diverse della stessa nota atterrano entrambi invece di scontrarsi.
+- **Igiene dei collegamenti come disciplina.** Una mappa strutturale deterministica del vault (`vault-map`: wikilink rotti con suggerimento di ricollocazione, note orfane, hub) è cablata nei flussi invece che lasciata come controllo periodico: ogni scrittura di memoria restituisce l'elenco advisory dei wikilink irrisolti appena introdotti (mai bloccante — il link "in avanti" deliberato è legittimo), il grooming tratta orfani e link rotti come candidati di pulizia di prima classe, `agent-doctor` tiene un paracadute warn-only e il tool read-only `map_overview` dà agli agenti una bussola a budget di token prima dei task larghi.
+- **Comandi cross-CLI come skill.** Dichiari una skill una volta e diventa un comando invocabile su ogni runtime supportato (`/nome`, `$nome` su Codex). Sette comandi starter inclusi: `vault-doctor`, `vault-close`, `vault-save`, `vault-council`, `vault-groom`, `vault-update` e `vault-map`.
 - **Grooming del vault, opzionale e manuale.** `vault-groom.sh` e `vault-groom.ps1` usano un playbook e un LLM per trovare note obsolete, duplicate o scollegate.
   L'esecuzione semplice, così come `preview`, è sempre in sola lettura.
   Con `vault-groom apply`, lo strumento propone una tranche di modifiche, la mostra per intero e avvia la scrittura solo dopo che hai digitato `yes`.
@@ -291,7 +296,7 @@ Il progetto si concentra sulla configurazione, sulla memoria versionata e sui co
 
 Se ti serve soprattutto distribuire un set di regole e config MCP a molti strumenti, [ruler](https://github.com/intellectronica/ruler) e [rulesync](https://github.com/dyoshikawa/rulesync) sono più maturi e generano per una trentina di target, incluse le quattro CLI che NeXgen supporta. Parti da lì se ti basta il fan-out della configurazione. Se vuoi una memoria Markdown che un agente legge e scrive, la convenzione [Memory Bank di Cline](https://github.com/cline/cline) e [basic-memory](https://github.com/basicmachines-co/basic-memory) hanno reso popolare l'idea e sono più avanti.
 
-NeXgen Engine sta dove queste due idee si incontrano, e aggiunge una cosa sul lato memoria. Genera la config MCP per ogni CLI *e* tiene la memoria di lavoro come Markdown puro in Git, dove ogni scrittura è un compare-and-swap: il server di memoria rifiuta un replace se l'hash SHA-256 di chi scrive non combacia col file attuale, e ogni scrittura accettata diventa un suo commit Git. Quel vault, la config per-strumento e un unico AGENTS.md vengono portati tra le macchine da un sync che fallisce chiuso, con un doctor che segnala il drift tra la sorgente canonica e i file generati.
+NeXgen Engine sta dove queste due idee si incontrano, e aggiunge una cosa sul lato memoria. Genera la config MCP per ogni CLI *e* tiene la memoria di lavoro come Markdown puro in Git, dove ogni scrittura è un compare-and-swap: il server di memoria rifiuta un replace se l'hash SHA-256 di chi scrive non combacia col contenuto attuale — a nota intera o per singola sezione, così modifiche concorrenti a parti diverse della stessa nota atterrano entrambe — e ogni scrittura accettata diventa un suo commit Git, che segnala anche gli eventuali wikilink morti appena introdotti. Quel vault, la config per-strumento e un unico AGENTS.md vengono portati tra le macchine da un sync che fallisce chiuso, con un doctor che segnala il drift tra la sorgente canonica e i file generati, e una mappa deterministica di igiene dei collegamenti sopra la memoria stessa.
 
 È un progetto solo-maintainer con licenza noncommerciale, Linux stabile e Windows in beta. Non pretende di essere il primo su nessuno di questi pezzi: il motivo per guardarlo è la combinazione specifica, e la disciplina di scrittura sulla memoria.
 
