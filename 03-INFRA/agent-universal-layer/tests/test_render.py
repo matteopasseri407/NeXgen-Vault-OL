@@ -1127,3 +1127,100 @@ def test_revert_wired_in_argparse(sandbox_with_live_configs, monkeypatch):
     monkeypatch.setattr("sys.argv", ["render.py", "--revert", "claude"])
     assert mod.main() == 0
     assert path.read_text(encoding="utf-8") == old
+
+
+# ---- --adopt: read-only draft manifest entries for out-of-manifest servers --
+# Reads a CLI's live config, finds the servers render already flags as OUTSIDE
+# THE MANIFEST, and prints a DRAFT manifest.yaml entry per server. Writes
+# nothing; secrets are redacted to <AUTH> (a hand-added literal token is never
+# echoed); an env-var reference's NAME is kept, since a name is not a secret.
+
+def test_adopt_proposes_out_of_manifest_server_codex(sandbox_with_live_configs, capsys):
+    sb = sandbox_with_live_configs
+    mod = load_render_module(sb)
+    rc = mod.cmd_adopt("codex")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "legacy_extra_tool" in out
+    assert "transport" in out and "stdio" in out
+    assert "legacy-cmd" in out
+    assert "codex" in out          # targets: [codex]
+    # a server that IS in the manifest must never be proposed for adoption
+    assert "fake_stdio_tool" not in out
+
+
+def test_adopt_proposes_out_of_manifest_server_claude(sandbox_with_live_configs, capsys):
+    sb = sandbox_with_live_configs
+    mod = load_render_module(sb)
+    rc = mod.cmd_adopt("claude")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "legacy-extra-tool" in out
+    assert "targets" in out and "claude" in out
+
+
+def test_adopt_redacts_a_hand_added_literal_secret(sandbox_with_live_configs, capsys):
+    sb = sandbox_with_live_configs
+    path = sb.live_config_path("claude")
+    live = json.loads(path.read_text(encoding="utf-8"))
+    live["mcpServers"]["hand-added"] = {
+        "type": "stdio",
+        "command": "srv",
+        "env": {"API_TOKEN": "super-secret-literal-value-do-not-print"},
+    }
+    path.write_text(json.dumps(live, indent=2), encoding="utf-8")
+
+    mod = load_render_module(sb)
+    rc = mod.cmd_adopt("claude")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "hand-added" in out
+    assert "super-secret-literal-value-do-not-print" not in out
+    assert "<AUTH>" in out
+
+
+def test_adopt_http_keeps_env_var_name_not_the_token(sandbox_with_live_configs, capsys):
+    sb = sandbox_with_live_configs
+    path = sb.live_config_path("claude")
+    live = json.loads(path.read_text(encoding="utf-8"))
+    live["mcpServers"]["remote-thing"] = {
+        "type": "http",
+        "url": "http://127.0.0.1:9/mcp",
+        "headers": {"Authorization": "Bearer ${REMOTE_THING_TOKEN}"},
+    }
+    path.write_text(json.dumps(live, indent=2), encoding="utf-8")
+
+    mod = load_render_module(sb)
+    mod.cmd_adopt("claude")
+    out = capsys.readouterr().out
+    assert "remote-thing" in out
+    assert "http" in out
+    assert "REMOTE_THING_TOKEN" in out    # the env-var NAME is safe to show
+
+
+def test_adopt_config_not_present_returns_3(sandbox):
+    mod = load_render_module(sandbox)
+    assert mod.cmd_adopt("claude") == 3
+
+
+def test_adopt_nothing_when_all_live_servers_are_in_manifest(sandbox, capsys):
+    path = sandbox.home / ".claude.json"
+    path.write_text(
+        json.dumps({"mcpServers": {"fake-stdio-tool": {"type": "stdio", "command": "x", "args": []}}}, indent=2),
+        encoding="utf-8",
+    )
+    mod = load_render_module(sandbox)
+    rc = mod.cmd_adopt("claude")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "nothing to adopt" in out
+
+
+def test_adopt_wired_in_argparse(sandbox_with_live_configs, monkeypatch, capsys):
+    sb = sandbox_with_live_configs
+    mod = load_render_module(sb)
+    monkeypatch.setattr("sys.argv", ["render.py", "--adopt", "codex"])
+    rc = mod.main()
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "legacy_extra_tool" in out

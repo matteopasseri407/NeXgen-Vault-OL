@@ -24,7 +24,11 @@ dialect.
   - --revert CLI: restore that CLI's native config from the most recent
     render.py backup (<file>.bak-*), backing up the current file first so the
     revert is itself undoable. Read-mostly and additive: touches only that
-    CLI's own config file and its .bak-* siblings."""
+    CLI's own config file and its .bak-* siblings.
+  - --adopt CLI: read-only onboarding helper. Lists the servers in a CLI's
+    LIVE config that are NOT in the manifest and prints a DRAFT manifest.yaml
+    entry for each (secrets redacted to <AUTH>, env-var names kept). Writes
+    nothing; exit 0."""
 from __future__ import annotations
 import argparse, difflib, json, os, platform, re, shutil, sys, time
 from pathlib import Path
@@ -998,6 +1002,152 @@ def cmd_revert(cli):
     print(f">>> REVERTED {path.name} from {latest.name} (current state saved as {safety.name}).")
     return 0
 
+def _bearer_var(auth_value):
+    """Extract the env-var NAME from a rendered auth header ('Bearer ${VAR}'
+    or 'Bearer {env:VAR}'). A var name is not a secret, so it is safe to show;
+    a literal token (no ${}/{env:} wrapper) matches nothing and is dropped."""
+    if not isinstance(auth_value, str):
+        return None
+    m = re.search(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", auth_value)
+    if not m:
+        m = re.search(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}", auth_value)
+    return m.group(1) if m else None
+
+def _adopt_entry(cli, spec):
+    """Best-effort inverse of r_<cli>: turn a live MCP server structure back
+    into a manifest.yaml stub (transport plus the fields that matter).
+    Defensive (.get everywhere) so an unexpected live shape never crashes; the
+    caller redacts the result before printing."""
+    entry = {}
+    args = spec.get("args")
+    if cli == "claude":
+        if spec.get("type") == "http" or "url" in spec:
+            entry["transport"] = "http"
+            entry["url"] = spec.get("url")
+            var = _bearer_var((spec.get("headers") or {}).get("Authorization"))
+            if var:
+                entry["auth"] = {"env": var}
+        else:
+            entry["transport"] = "stdio"
+            entry["command"] = spec.get("command")
+            if args:
+                entry["args"] = args
+            if spec.get("env"):
+                entry["env"] = spec["env"]
+    elif cli == "codex":
+        if "url" in spec:
+            entry["transport"] = "http"
+            entry["url"] = spec.get("url")
+            if spec.get("bearer_token_env_var"):
+                entry["auth"] = {"env": spec["bearer_token_env_var"]}
+            timeouts = {}
+            if "startup_timeout_sec" in spec:
+                timeouts["startup"] = spec["startup_timeout_sec"]
+            if "tool_timeout_sec" in spec:
+                timeouts["tool"] = spec["tool_timeout_sec"]
+            if timeouts:
+                entry["timeouts"] = timeouts
+        else:
+            entry["transport"] = "stdio"
+            entry["command"] = spec.get("command")
+            if args:
+                entry["args"] = args
+            if spec.get("env"):
+                entry["env"] = spec["env"]
+    elif cli == "opencode":
+        if spec.get("type") == "remote" or "url" in spec:
+            entry["transport"] = "http"
+            entry["url"] = spec.get("url")
+            var = _bearer_var((spec.get("headers") or {}).get("Authorization"))
+            if var:
+                entry["auth"] = {"env": var}
+        else:
+            command = spec.get("command")
+            if isinstance(command, list) and command:
+                entry["transport"] = "stdio"
+                entry["command"] = command[0]
+                if command[1:]:
+                    entry["args"] = command[1:]
+            else:
+                entry["transport"] = "stdio"
+                entry["command"] = command
+            if spec.get("environment"):
+                entry["env"] = spec["environment"]
+    elif cli == "antigravity":
+        args = args or []
+        bridged = spec.get("command") in ("node", "node.exe") and any(
+            "mcp-http-bridge" in str(a) for a in args)
+        if bridged:
+            entry["transport"] = "http"
+            if len(args) >= 3:
+                entry["url"] = args[1]
+                entry["auth"] = {"env": args[2]}
+        else:
+            entry["transport"] = "stdio"
+            entry["command"] = spec.get("command")
+            if args:
+                entry["args"] = args
+            if spec.get("env"):
+                entry["env"] = spec["env"]
+    entry["targets"] = [cli]
+    return entry
+
+def _adopt_yaml_scalar(v):
+    # JSON is a subset of YAML 1.2, so a json-encoded scalar is valid YAML and
+    # already quotes anything that needs quoting -- no hand-rolled escaping.
+    return json.dumps(v, ensure_ascii=False)
+
+def _emit_manifest_stub(name, entry):
+    lines = [f"  {_adopt_yaml_scalar(name)}:"]
+    for key, value in entry.items():
+        if isinstance(value, dict):
+            lines.append(f"    {key}:")
+            for kk, vv in value.items():
+                lines.append(f"      {_adopt_yaml_scalar(kk)}: {_adopt_yaml_scalar(vv)}")
+        elif isinstance(value, list):
+            lines.append(f"    {key}: [{', '.join(_adopt_yaml_scalar(x) for x in value)}]")
+        else:
+            lines.append(f"    {key}: {_adopt_yaml_scalar(value)}")
+    return "\n".join(lines)
+
+def cmd_adopt(cli):
+    """Read-only onboarding helper: list the MCP servers present in <cli>'s
+    LIVE config but absent from the manifest (the ones render already flags as
+    OUTSIDE THE MANIFEST), and print, for each, a DRAFT manifest.yaml entry to
+    review and paste. Writes nothing. Secrets are redacted to <AUTH>, so a
+    hand-added literal token is never echoed; an env-var reference's NAME is
+    kept, since a name is not a secret.
+    Exit: 0 (incl. nothing to adopt), 2 manifest error, 3 config not present."""
+    try:
+        raw, _retired = load_mcp_manifest_document(MANIFEST)
+    except ConfigValidationError as exc:
+        print(f">>> STOP: invalid MCP manifest ({exc}). Fix the data source before retrying.", file=sys.stderr)
+        return 2
+    try:
+        live = load_current(cli)
+    except SystemExit:
+        return 2   # load_current already printed a STOP for a corrupted live config
+    if live is None:
+        print(f">>> {cli} config not present (not installed, or never launched): nothing to adopt.")
+        return 3
+    manifest_keys = {CLI[cli]["name"](name) for name in raw}
+    extras = {k: v for k, v in live.items() if k not in manifest_keys}
+    if not extras:
+        print(f">>> {cli}: every live MCP server is already in the manifest -- nothing to adopt.")
+        return 0
+    print(f">>> {cli}: {len(extras)} server(s) in the live config but NOT in the manifest.")
+    print(">>> DRAFT manifest.yaml entries below -- review, adjust, then add under 'servers:'. Secrets shown as <AUTH>.")
+    print("servers:")
+    for name in sorted(extras):
+        entry = _adopt_entry(cli, extras[name])
+        auth = entry.get("auth")
+        auth_env = auth.get("env") if isinstance(auth, dict) else None
+        safe = redact(entry)
+        if auth_env:
+            safe["auth"] = {"env": auth_env}   # a var name, not a secret: restore after redaction
+        print(_emit_manifest_stub(name, safe))
+    return 0
+
 def cmd_write(cli):
     if cli == "opencode":
         return write_opencode()
@@ -1017,9 +1167,13 @@ def main():
                      help="print (one per line) the manifest server names that target CLI and pass require_env filtering; machine-consumable, exit 0.")
     ap.add_argument("--revert", metavar="CLI", choices=list(CLI),
                      help="restore a CLI's native config from the most recent render.py .bak-* backup (backs up the current file first).")
+    ap.add_argument("--adopt", metavar="CLI", choices=list(CLI),
+                     help="read-only: print DRAFT manifest.yaml entries for servers in a CLI's live config that aren't in the manifest yet.")
     args = ap.parse_args()
     if args.expected_servers:
         return cmd_expected_servers(args.expected_servers)
+    if args.adopt:
+        return cmd_adopt(args.adopt)
     if args.revert:
         return cmd_revert(args.revert)
     if args.write:

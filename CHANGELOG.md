@@ -14,6 +14,7 @@ of any engine release.
 
 - `agent-doctor` gains two read-only, warning-only bootstrap-hygiene checks (both the `.sh` and `.ps1` twins): a size budget for the canonical `AGENTS.md` bootstrap and for each `03-INFRA/*.md` detail note (overridable via `NEXGEN_BOOTSTRAP_MAX_BYTES` and `NEXGEN_NOTE_MAX_BYTES`), and a load-on-demand pointer-integrity check that flags a backtick-referenced vault note path that no longer resolves. Both only ever WARN, so they never turn a passing doctor red; the literal `03-INFRA/<topic>.md` placeholder in the editing-discipline prose is skipped.
 - `render.py --revert CLI` restores a CLI's native config from the most recent render.py backup (`<file>.bak-*`), backing up the current file first so the revert is itself undoable. The restored backup is re-validated in its own JSON/TOML format before it is written, and nothing but that CLI's own config and its `.bak-*` siblings is touched.
+- `render.py --adopt CLI` is a read-only onboarding helper: it lists the MCP servers present in a CLI's live config but absent from the manifest (the ones render already flags as OUTSIDE THE MANIFEST) and prints a DRAFT `manifest.yaml` entry for each to review and paste. It writes nothing; secrets are redacted to `<AUTH>` so a hand-added literal token is never echoed, while an env-var reference's name is kept (a name is not a secret).
 
 ### Security
 
