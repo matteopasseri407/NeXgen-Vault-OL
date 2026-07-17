@@ -21,6 +21,10 @@ TAG_RE = re.compile(r"(?<!\w)#([A-Za-z0-9/_-]+)")
 HEADING_RE = re.compile(r"^\s*#\s+(.+?)\s*$", re.MULTILINE)
 FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
 NON_WORD_RE = re.compile(r"[^a-z0-9]+")
+ATX_HEADING_LINE_RE = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.*?)[ \t]*$")
+ATX_CLOSING_HASHES_RE = re.compile(r"[ \t]+#+$")
+FENCE_LINE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+SECTION_HEADING_ARG_RE = re.compile(r"(#{1,6})\s+(\S.*)$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +40,15 @@ class NoteRecord:
     truncated: bool
     tags: tuple[str, ...]
     raw_links: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class NoteSection:
+    heading: str
+    text: str
+    level: int
+    start: int
+    end: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +156,100 @@ def _extract_links(text: str) -> tuple[str, ...]:
         seen.add(key)
         deduplicated.append(link)
     return tuple(deduplicated)
+
+
+def _parse_sections(full_text: str) -> tuple[NoteSection, ...]:
+    """Split a note into ATX-heading sections.
+
+    Frontmatter is never a section, a heading-looking line inside a fenced
+    code block is never a boundary, and a section's span runs from its
+    heading line up to the next heading of the same or a shallower level
+    (deeper subsections stay inside their parent's span).
+    """
+
+    offset = 0
+    frontmatter = FRONTMATTER_RE.match(full_text)
+    if frontmatter:
+        offset = frontmatter.end()
+
+    headings: list[tuple[int, int, str]] = []
+    fence_marker: str | None = None
+    position = offset
+    for line in full_text[offset:].splitlines(keepends=True):
+        stripped = line.rstrip("\r\n")
+        fence = FENCE_LINE_RE.match(stripped)
+        if fence_marker is not None:
+            if (
+                fence
+                and fence.group(1)[0] == fence_marker[0]
+                and len(fence.group(1)) >= len(fence_marker)
+                and not fence.group(2).strip()
+            ):
+                fence_marker = None
+        elif fence:
+            fence_marker = fence.group(1)
+        else:
+            heading = ATX_HEADING_LINE_RE.match(stripped)
+            if heading:
+                text = ATX_CLOSING_HASHES_RE.sub("", heading.group(2)).strip()
+                headings.append((position, len(heading.group(1)), text))
+        position += len(line)
+
+    sections: list[NoteSection] = []
+    for index, (start, level, text) in enumerate(headings):
+        end = len(full_text)
+        for next_start, next_level, _ in headings[index + 1 :]:
+            if next_level <= level:
+                end = next_start
+                break
+        sections.append(
+            NoteSection(
+                heading=f"{'#' * level} {text}",
+                text=text,
+                level=level,
+                start=start,
+                end=end,
+            )
+        )
+    return tuple(sections)
+
+
+def _match_section(sections: tuple[NoteSection, ...], section_heading: str) -> NoteSection:
+    cleaned = " ".join(section_heading.strip().split())
+    if not cleaned:
+        raise ValueError("section_heading cannot be empty")
+
+    level: int | None = None
+    target = cleaned
+    qualified = SECTION_HEADING_ARG_RE.fullmatch(cleaned)
+    if qualified:
+        level = len(qualified.group(1))
+        target = qualified.group(2)
+
+    def _norm(value: str) -> str:
+        return " ".join(value.split())
+
+    candidates = [
+        section
+        for section in sections
+        if _norm(section.text) == _norm(target) and (level is None or section.level == level)
+    ]
+
+    if not candidates:
+        available = ", ".join(section.heading for section in sections[:20])
+        raise ValueError(f"Section not found: {section_heading!r}. Available headings: {available}")
+    if len(candidates) > 1:
+        if level is None and len({section.level for section in candidates}) > 1:
+            options = ", ".join(section.heading for section in candidates[:5])
+            raise ValueError(
+                f"Ambiguous section heading {section_heading!r} ({options}). "
+                "Qualify the level, e.g. '## title'."
+            )
+        raise ValueError(
+            f"Heading {candidates[0].heading!r} appears {len(candidates)} times; "
+            "section-level editing needs a unique heading. Use update_note instead."
+        )
+    return candidates[0]
 
 
 def _make_snippet(text: str, query: str, terms: list[str], size: int = 240) -> str:
@@ -411,6 +518,80 @@ class VaultService:
             result["old_content_hash"] = current_hash
             return result
 
+    def update_section(
+        self,
+        note_ref: str,
+        section_heading: str,
+        content: str,
+        expected_hash: str,
+        message: str = "",
+    ) -> dict[str, Any]:
+        """Replace exactly one ATX-heading section when expected_hash matches
+        that section's current hash (from read_note's `sections`).
+
+        The compare-and-swap is per-section: edits landed elsewhere in the
+        note since the read do not invalidate this write.
+        """
+
+        self._assert_write_enabled()
+        record = self._resolve_note_ref(note_ref)
+        target_path, rel_path = self._resolve_write_path(record.rel_path)
+
+        with self._write_lock():
+            self._ensure_git_clean()
+            current = target_path.read_text(encoding="utf-8")
+            sections = _parse_sections(current)
+            if not sections:
+                raise ValueError(
+                    f"Note has no ATX headings to address: {rel_path}. Use update_note instead."
+                )
+            section = _match_section(sections, section_heading)
+            span = current[section.start : section.end]
+            span_hash = _hash_text(span)
+            if expected_hash.strip().lower() != span_hash:
+                raise ValueError(
+                    f"expected_hash does not match the current content of section "
+                    f"{section.heading!r}. Read the note again (read_note lists "
+                    "per-section hashes) before updating."
+                )
+
+            new_span = self._validate_section_replacement(content, section)
+            if section.end < len(current) and not new_span.endswith("\n\n"):
+                new_span += "\n"
+            new_content = f"{current[: section.start]}{new_span}{current[section.end :]}"
+            self._write_note_file(target_path, new_content)
+            result = self._commit_note(
+                rel_path,
+                message or f"vault: update section {section.text} in {rel_path}",
+                action="updated_section",
+            )
+            result["section"] = section.heading
+            result["old_section_hash"] = span_hash
+            result["new_section_hash"] = _hash_text(new_span)
+            return result
+
+    def _validate_section_replacement(self, content: str, section: NoteSection) -> str:
+        normalized = self._normalize_write_content(content)
+        inner = _parse_sections(normalized)
+        if not inner or normalized[: inner[0].start].strip():
+            raise ValueError(
+                "Replacement content must start with the section's ATX heading line "
+                f"(level {section.level}, e.g. {section.heading!r})."
+            )
+        if inner[0].level != section.level:
+            raise ValueError(
+                f"Replacement heading level must stay {section.level} "
+                f"(got level {inner[0].level}). Restructuring needs update_note."
+            )
+        for extra in inner[1:]:
+            if extra.level <= section.level:
+                raise ValueError(
+                    f"Replacement content injects heading {extra.heading!r} at the same "
+                    "or a shallower level, which would reshape the note beyond this "
+                    "section. Use update_note for structural changes."
+                )
+        return normalized
+
     def recent_activity(self, limit: int | None = None) -> dict[str, Any]:
         search_limit = self._normalize_limit(limit)
         index = self._get_index()
@@ -549,6 +730,20 @@ class VaultService:
         return True
 
     def _note_payload(self, record: NoteRecord) -> dict[str, Any]:
+        # Truncated reads would hash spans that do not exist on disk; those
+        # notes fall back to whole-note update_note.
+        sections = (
+            []
+            if record.truncated
+            else [
+                {
+                    "heading": section.heading,
+                    "level": section.level,
+                    "content_hash": _hash_text(record.full_content[section.start : section.end]),
+                }
+                for section in _parse_sections(record.full_content)
+            ]
+        )
         return {
             "path": record.rel_path,
             "title": record.title,
@@ -559,6 +754,7 @@ class VaultService:
             "content": record.body,
             "full_content": record.full_content,
             "content_hash": record.content_hash,
+            "sections": sections,
         }
 
     def _normalize_limit(self, limit: int | None) -> int:

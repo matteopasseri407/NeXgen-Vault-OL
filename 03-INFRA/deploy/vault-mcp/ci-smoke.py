@@ -5,6 +5,7 @@ started from this directory's Dockerfile, mounted on a fixture vault +
 bare repo. Exercises the real write path over streamable-http MCP:
 
     list tools -> create_note -> read_note -> update_note (hash guard)
+    -> update_section (per-section hash guard, stale hash refused)
 
 plus one negative check (a write into 99-SECRETS must be refused). The
 surrounding job verifies the produced Git commits afterwards.
@@ -33,6 +34,7 @@ REQUIRED_TOOLS = {
     "create_note",
     "append_note",
     "update_note",
+    "update_section",
 }
 
 
@@ -90,6 +92,68 @@ async def main() -> None:
             )
             assert updated.get("action") == "updated", updated
             assert updated.get("committed") is True, updated
+
+            # Section-level CAS: edit one section, the sibling must survive
+            # byte-identical and a stale section hash must be refused.
+            created_sections = _payload(
+                await session.call_tool(
+                    "create_note",
+                    {
+                        "note_path": "01-NOTES/ci-smoke-sections.md",
+                        "content": "# CI sections\n\nintro\n\n## Keep\n\nkeep body\n\n## Edit\n\nold body\n",
+                        "message": "ci: smoke sections create",
+                    },
+                )
+            )
+            assert created_sections.get("committed") is True, created_sections
+
+            section_note = _payload(
+                await session.call_tool(
+                    "read_note", {"note_ref": "01-NOTES/ci-smoke-sections.md"}
+                )
+            )
+            by_heading = {s["heading"]: s for s in section_note.get("sections", [])}
+            assert "## Edit" in by_heading and "## Keep" in by_heading, section_note
+
+            section_updated = _payload(
+                await session.call_tool(
+                    "update_section",
+                    {
+                        "note_ref": "01-NOTES/ci-smoke-sections.md",
+                        "section_heading": "## Edit",
+                        "content": "## Edit\n\nnew body from ci\n",
+                        "expected_hash": by_heading["## Edit"]["content_hash"],
+                        "message": "ci: smoke section update",
+                    },
+                )
+            )
+            assert section_updated.get("action") == "updated_section", section_updated
+            assert section_updated.get("committed") is True, section_updated
+
+            after = _payload(
+                await session.call_tool(
+                    "read_note", {"note_ref": "01-NOTES/ci-smoke-sections.md"}
+                )
+            )
+            assert "new body from ci" in after["content"], after
+            assert "keep body" in after["content"], after
+
+            stale = await session.call_tool(
+                "update_section",
+                {
+                    "note_ref": "01-NOTES/ci-smoke-sections.md",
+                    "section_heading": "## Edit",
+                    "content": "## Edit\n\nmust not land\n",
+                    "expected_hash": by_heading["## Edit"]["content_hash"],
+                    "message": "ci: must be refused",
+                },
+            )
+            stale_body = ""
+            if stale.content:
+                stale_body = getattr(stale.content[0], "text", "") or ""
+            assert stale.isError or "expected_hash" in stale_body, (
+                f"stale section hash was not refused: isError={stale.isError} body={stale_body!r}"
+            )
 
             # Guardrail: the write-exclusion for 99-SECRETS must hold.
             refused = await session.call_tool(

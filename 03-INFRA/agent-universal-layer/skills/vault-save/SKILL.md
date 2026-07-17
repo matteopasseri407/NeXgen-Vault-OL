@@ -14,9 +14,11 @@ The text after the command is the fact to save.
 2. Find the canonical home: search the vault (`search_notes` or
    `semantic_search`) for a note that already covers the topic. Prefer
    updating that note over creating a new one.
-3. Write through the `vault-library` MCP (`append_note`, or `update_note`
-   with `expected_hash`). Only `create_note` for a genuinely new stable
-   topic, and then add an inbound pointer in `00-START-HERE.md`.
+3. Write through the `vault-library` MCP (`append_note`; `update_section`
+   with its per-section hash when the fact belongs to one existing section;
+   `update_note` with `expected_hash` for whole-note rewrites). Only
+   `create_note` for a genuinely new stable topic, and then add an inbound
+   pointer in `00-START-HERE.md`.
 4. Confirm the write landed and report exactly where the fact now lives
    (note path plus the line or section).
 
