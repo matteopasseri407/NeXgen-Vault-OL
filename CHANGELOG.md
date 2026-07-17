@@ -8,7 +8,9 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
-## [Unreleased]
+## [0.91.0] - 2026-07-17
+
+Link hygiene for the memory plane, end to end: a deterministic structural map of the vault (broken wikilinks, orphans, hubs) wired as discipline into the flows — grooming candidates, a write-time advisory on every memory write, an orientation tool for agents, a seventh starter command — rather than as another periodic check. The version jump (0.9 → 0.91) signals proximity to a stable line, not 91 intermediate releases. Maturity stays **Beta** (stability is not yet guaranteed).
 
 ### Added
 
