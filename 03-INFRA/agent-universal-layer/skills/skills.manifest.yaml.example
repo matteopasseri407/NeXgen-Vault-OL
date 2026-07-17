@@ -71,6 +71,21 @@ skills:
     targets: [claude, antigravity, opencode]
     exposure: core
 
+  vault-council:
+    origin: vault
+    targets: [claude, antigravity, opencode]
+    exposure: core
+
+  vault-groom:
+    origin: vault
+    targets: [claude, antigravity, opencode]
+    exposure: core
+
+  vault-update:
+    origin: vault
+    targets: [claude, antigravity, opencode]
+    exposure: core
+
   # --- example: a third-party skill, inventoried by pinned commit ------------
   # humanizer:
   #   origin: github

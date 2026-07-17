@@ -16,7 +16,10 @@ import yaml
 
 from conftest import REAL_VAULT
 
-STARTERS = ("vault-doctor", "vault-close", "vault-save")
+STARTERS = (
+    "vault-doctor", "vault-close", "vault-save",
+    "vault-council", "vault-groom", "vault-update",
+)
 SKILLS_ROOT = REAL_VAULT / "03-INFRA" / "agent-universal-layer" / "skills"
 EXAMPLE_MANIFEST = SKILLS_ROOT / "skills.manifest.yaml.example"
 
