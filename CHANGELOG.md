@@ -8,7 +8,9 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
-## [Unreleased]
+## [0.9.0] - 2026-07-17
+
+Section-level memory editing: the bundled `vault-library` MCP server gains surgical per-section writes under a per-section compare-and-swap, shrinking diffs and the concurrent-write collision window. Maturity stays **Beta** (stability is not yet guaranteed).
 
 ### Added
 
