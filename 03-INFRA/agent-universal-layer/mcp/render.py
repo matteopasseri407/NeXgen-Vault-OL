@@ -1110,12 +1110,61 @@ def _emit_manifest_stub(name, entry):
             lines.append(f"    {key}: {_adopt_yaml_scalar(value)}")
     return "\n".join(lines)
 
-def cmd_adopt(cli):
-    """Read-only onboarding helper: list the MCP servers present in <cli>'s
-    LIVE config but absent from the manifest (the ones render already flags as
-    OUTSIDE THE MANIFEST), and print, for each, a DRAFT manifest.yaml entry to
-    review and paste. Writes nothing. Secrets are redacted to <AUTH>, so a
-    hand-added literal token is never echoed; an env-var reference's NAME is
+def _insert_under_servers(text, stubs):
+    """Insert manifest stub blocks at the end of the top-level `servers:`
+    mapping, preserving the file's comments and layout. Returns the new text,
+    or None if no top-level `servers:` key is found."""
+    lines = text.splitlines()
+    servers_idx = next((i for i, ln in enumerate(lines) if ln.startswith("servers:")), None)
+    if servers_idx is None:
+        return None
+    end = len(lines)
+    for j in range(servers_idx + 1, len(lines)):
+        ln = lines[j]
+        if ln and not ln[0].isspace() and not ln.lstrip().startswith("#"):
+            end = j   # a new top-level key ends the servers mapping
+            break
+    new_lines = lines[:end] + stubs + lines[end:]
+    tail = "\n" if text.endswith("\n") else ""
+    return "\n".join(new_lines) + tail
+
+
+def _adopt_apply(extras, stubs):
+    """Append the drafted stubs into the vault manifest under `servers:`,
+    backing the file up first and re-validating after. On any validation
+    failure the original is restored, so the canonical manifest is never left
+    broken. Refuses outright if a literal secret (<AUTH>) is present."""
+    if any("<AUTH>" in s for s in stubs):
+        print(">>> STOP: a server carries a literal secret (shown as <AUTH>). Convert it to an env-var reference in the live config before adopting, so no secret lands in the manifest.", file=sys.stderr)
+        return 2
+    try:
+        raw_text = MANIFEST.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f">>> STOP: cannot read the manifest ({exc}).", file=sys.stderr)
+        return 2
+    new_text = _insert_under_servers(raw_text, stubs)
+    if new_text is None:
+        print(">>> STOP: could not locate the top-level 'servers:' block; add the drafted entries by hand.", file=sys.stderr)
+        return 2
+    bak = _secure_backup(MANIFEST, raw_text, "utf-8")
+    MANIFEST.write_text(new_text, encoding="utf-8")
+    try:
+        load_mcp_manifest_document(MANIFEST)
+    except ConfigValidationError as exc:
+        MANIFEST.write_text(raw_text, encoding="utf-8")
+        print(f">>> STOP: the adopted entries broke the manifest ({exc}); restored the original, nothing changed.", file=sys.stderr)
+        return 2
+    print(f">>> adopted {len(extras)} server(s) into the manifest: {', '.join(sorted(extras))}. Backup: {bak.name}. Review the diff and commit.")
+    return 0
+
+
+def cmd_adopt(cli, apply=False):
+    """Onboarding helper: find the MCP servers present in <cli>'s LIVE config
+    but absent from the manifest (what render flags as OUTSIDE THE MANIFEST).
+    Default (read-only) prints a DRAFT manifest entry for each to review. With
+    apply=True it appends them into the vault manifest (backed up first and
+    re-validated; restored on any failure). Secrets are redacted to <AUTH>, so
+    a literal token is never echoed nor written; an env-var reference's NAME is
     kept, since a name is not a secret.
     Exit: 0 (incl. nothing to adopt), 2 manifest error, 3 config not present."""
     try:
@@ -1135,9 +1184,7 @@ def cmd_adopt(cli):
     if not extras:
         print(f">>> {cli}: every live MCP server is already in the manifest -- nothing to adopt.")
         return 0
-    print(f">>> {cli}: {len(extras)} server(s) in the live config but NOT in the manifest.")
-    print(">>> DRAFT manifest.yaml entries below -- review, adjust, then add under 'servers:'. Secrets shown as <AUTH>.")
-    print("servers:")
+    stubs = []
     for name in sorted(extras):
         entry = _adopt_entry(cli, extras[name])
         auth = entry.get("auth")
@@ -1145,7 +1192,15 @@ def cmd_adopt(cli):
         safe = redact(entry)
         if auth_env:
             safe["auth"] = {"env": auth_env}   # a var name, not a secret: restore after redaction
-        print(_emit_manifest_stub(name, safe))
+        stubs.append(_emit_manifest_stub(name, safe))
+    if apply:
+        return _adopt_apply(extras, stubs)
+    print(f">>> {cli}: {len(extras)} server(s) in the live config but NOT in the manifest.")
+    print(">>> DRAFT manifest.yaml entries below -- review, adjust, then add under 'servers:'. Secrets shown as <AUTH>.")
+    print("servers:")
+    for stub in stubs:
+        print(stub)
+    print(">>> Re-run with --apply to append these under 'servers:' (backed up + re-validated first).")
     return 0
 
 def cmd_write(cli):
@@ -1207,13 +1262,15 @@ def main():
                      help="read-only: print DRAFT manifest.yaml entries for servers in a CLI's live config that aren't in the manifest yet.")
     ap.add_argument("--inventory", action="store_true",
                      help="read-only onboarding scan across all CLIs: MCP servers per CLI, canonical vs out-of-manifest (foundation of the adopt/reset flow).")
+    ap.add_argument("--apply", action="store_true",
+                     help="with --adopt: append the drafted entries into the vault manifest (backed up + re-validated first) instead of only printing them.")
     args = ap.parse_args()
     if args.inventory:
         return cmd_inventory()
     if args.expected_servers:
         return cmd_expected_servers(args.expected_servers)
     if args.adopt:
-        return cmd_adopt(args.adopt)
+        return cmd_adopt(args.adopt, apply=args.apply)
     if args.revert:
         return cmd_revert(args.revert)
     if args.write:
