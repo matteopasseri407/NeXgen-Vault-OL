@@ -8,6 +8,20 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## [0.92.0] - 2026-07-18
+
+Onboarding for existing setups. A fresh machine was always easy; this release handles the common real case, a machine whose CLIs are already configured with their own MCP servers, skills, and old configs.
+
+### Added
+
+- **Read-only inventory.** `agent-sync inventory` (and `render.py --inventory`) reports, across every CLI, the MCP servers, skills, per-CLI bootstrap, and native memory it finds, split into canonical (in the manifest) and out-of-manifest strays.
+- **Adopt.** `render.py --adopt <cli> --apply` promotes out-of-manifest MCP servers into the vault manifest, backing it up first and re-validating, so the canonical manifest is never left broken.
+- **Reset.** `render.py --reset <cli>` backs up and removes a CLI's config so a fresh provision recreates it clean, reversible with `render.py --revert`, which now also restores a removed file.
+- **Guided installer step.** `INIT.md` Step 1.5 (EN and IT) inventories an existing setup and offers a plain numbered menu: adopt what you have into the canonical source, start fresh, or pick item by item.
+- **Doctor nudge.** `agent-doctor` gently warns (never fails) about skills materialized outside the manifest, pointing at the onboarding flow.
+
+Claude native-memory confluence is an agent step in the installer (read the memory files, groom them, write via the memory MCP). Distilling the other CLIs' session transcripts is deferred to a later release. Maturity stays **Beta**.
+
 ## [0.91.4] - 2026-07-18
 
 ### Added

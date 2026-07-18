@@ -28,7 +28,7 @@ The security model and reporting instructions are in [`SECURITY.md`](SECURITY.md
 ## Demo path
 
 1. Clone the repository and run the preflight: `bash install.sh --check` on Linux/Mac, or `.\install.ps1 -Check` from PowerShell on Windows. It checks prerequisites, verifies the vault scaffold, and lists which supported AI tools it finds on your machine. It writes nothing.
-2. Open `INIT.md` and paste it into a filesystem-capable CLI such as Claude Code, Codex, OpenCode, or Antigravity. A web chat cannot write files. The setup asks how many tools and machines you plan to use, whether you want Local-Only or Cloud-Server mode, and then writes `99-INDEX/USER-PROFILE.md`.
+2. Open `INIT.md` and paste it into a filesystem-capable CLI such as Claude Code, Codex, OpenCode, or Antigravity. A web chat cannot write files. The setup asks how many tools and machines you plan to use, whether you want Local-Only or Cloud-Server mode, and then writes `99-INDEX/USER-PROFILE.md`. If you already run CLIs configured with their own MCP servers, skills, or configs, Step 1.5 takes over that existing setup: it inventories what is there and lets you adopt it into the canonical source or start fresh.
 3. The agent mounts the MCP servers and skills for your chosen CLI(s), following the manifests in `03-INFRA/`.
 4. If you are using the MULTI profile, run `agent-sync apply` to propagate the canonical configuration, then run `agent-doctor` to perform more than 30 live checks against your tools, VPS services, and secrets handling. Each check reports `pass`, `warn`, or `fail`. On Windows, the first `apply` also adds the commands directory to the user PATH. Open a new terminal afterwards so `agent-sync`, `agent-doctor`, `vault-groom`, and `vault-push` resolve as commands.
 5. Make a manual change, such as an extra MCP entry or an edited configuration file, and run `agent-doctor` again to see the difference reported.
@@ -205,6 +205,7 @@ La postura di sicurezza e le istruzioni per segnalare problemi sono in [`SECURIT
 2. Apri `INIT.md` e incollalo in una CLI capace di modificare file, come Claude Code, Codex, OpenCode o Antigravity.
    Una chat web non può modificare il repository.
    La procedura chiede quanti strumenti e quante macchine vuoi usare, oltre alla modalità Local-Only o Cloud-Server, poi compila `99-INDEX/USER-PROFILE.md`.
+   Se usi già delle CLI configurate con server MCP, skill o config tue, lo Step 1.5 prende in carico il setup esistente, fa l'inventario di quello che c'è e ti fa scegliere se adottarlo nella fonte canonica oppure ripartire da zero.
 3. L'agente monta i server MCP e le skill per le CLI scelte, usando i manifest presenti in `03-INFRA/`.
 4. Se usi il profilo MULTI, cioè almeno due CLI o due macchine, esegui `agent-sync apply` per propagare la configurazione canonica.
    Poi esegui `agent-doctor` per controllare lo stato reale, con oltre 30 verifiche su CLI, servizi VPS e gestione dei segreti.
