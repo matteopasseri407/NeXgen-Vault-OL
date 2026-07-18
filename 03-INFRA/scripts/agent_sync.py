@@ -97,6 +97,7 @@ HELP_TEXT = """agent_sync modes:
   doctor   Run healthcheck/alerts only.
   bootstrap-alerts  Provision optional alert credentials and run healthcheck.
   config FIELD  Print resolved sync data. FIELD is authoritative_remote or mirrors.
+  inventory  Read-only onboarding scan: MCP servers, skills, and bootstrap per CLI, canonical vs out-of-manifest. Foundation of the adopt/reset flow. No writes.
   vault-push -m MSG [file ...]  Commit (+ stage given files) and publish the
     vault's infra files to the authoritative remote, then its mirrors. See
     docs/sync-contract.md and vault-write-architecture.md.
@@ -2107,6 +2108,89 @@ def _run_phase(env: Env, name: str, fn: Callable[[Env], object]) -> bool:
 
 # ── entry point ──────────────────────────────────────────────────────────
 
+def _skill_manifest_names(path: Path) -> "set[str] | None":
+    """Canonical skill names = the keys of the manifest's `skills:` mapping
+    (same shape as the MCP manifest's `servers:`). None when the manifest is
+    absent or unreadable, so the caller skips the skill section rather than
+    reporting a false 'everything is stray'."""
+    if not path.is_file():
+        return None
+    import yaml
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return None
+    skills = data.get("skills") if isinstance(data, dict) else None
+    if not isinstance(skills, dict):
+        return None
+    return set(skills.keys())
+
+
+def _skill_inventory(manifest_names, materialized):
+    """Split materialized skills into canonical (in the manifest), out-of-manifest
+    extras, and manifest entries not yet materialized. Pure and testable."""
+    canonical = sorted(n for n in materialized if n in manifest_names)
+    extras = sorted(n for n in materialized if n not in manifest_names)
+    missing = sorted(n for n in manifest_names if n not in materialized)
+    return canonical, extras, missing
+
+
+def _inventory_cli(argv: list[str]) -> int:
+    """Read-only onboarding scan of the whole setup: MCP servers (via
+    render.py --inventory), skills (manifest vs materialized library), and
+    per-CLI bootstrap presence. Foundation of the adopt/reset onboarding flow;
+    never writes. Exit 0 (report) or 2 on an env/config error."""
+    if argv:
+        print("agent_sync: inventory takes no arguments", file=sys.stderr)
+        return 2
+    try:
+        env = Env()
+    except RemoteConfigError as exc:
+        print(f"agent_sync: {exc}", file=sys.stderr)
+        return 2
+
+    render_path = env.ul / "mcp" / "render.py"
+    if render_path.is_file():
+        r = _run_python_script([sys.executable, str(render_path), "--inventory"])
+        sys.stdout.write(r.stdout)
+        if r.stderr.strip():
+            sys.stderr.write(r.stderr)
+    else:
+        print(f">>> renderer not found ({render_path}); MCP inventory skipped")
+
+    print("")
+    print(">>> Onboarding inventory -- skills (manifest vs materialized library):")
+    manifest_names = _skill_manifest_names(env.instance_ul / "skills" / "skills.manifest.yaml")
+    if manifest_names is None:
+        print("  skills manifest absent or unreadable -- skill inventory skipped")
+    else:
+        if env.skill_library.is_dir():
+            materialized = [p.name for p in env.skill_library.iterdir() if p.is_dir()]
+        else:
+            materialized = []
+        canonical, extras, missing = _skill_inventory(manifest_names, materialized)
+        print(f"  {len(materialized)} materialized skill(s) -- {len(canonical)} canonical, {len(extras)} out-of-manifest")
+        if extras:
+            print(f"      out-of-manifest: {', '.join(extras)}")
+        if missing:
+            print(f"      in manifest but not materialized: {', '.join(missing)}")
+
+    print("")
+    print(">>> Onboarding inventory -- bootstrap per CLI (read-only):")
+    bootstraps = [
+        ("claude", env.home / "CLAUDE.md"),
+        ("codex", env.home / ".codex" / "AGENTS.md"),
+        ("antigravity", env.home / ".gemini" / "config" / "AGENTS.md"),
+        ("opencode", _opencode_config_path(env.home)),
+    ]
+    for label, path in bootstraps:
+        print(f"  {label}: {'present' if path.exists() else 'not configured on this machine'}")
+
+    print("")
+    print(">>> Read-only. Adopt (canonize) or reset what's out-of-manifest via the onboarding flow.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if not argv or argv[0] in ("-h", "--help", "help"):
@@ -2116,6 +2200,8 @@ def main(argv: list[str] | None = None) -> int:
         return _print_config(argv)
     if argv[0] == "vault-push":
         return _vault_push_cli(argv[1:])
+    if argv[0] == "inventory":
+        return _inventory_cli(argv[1:])
 
     mode, skip_mcp, allow_offline, extras = _parse_cli(argv)
     if mode not in MODES:
