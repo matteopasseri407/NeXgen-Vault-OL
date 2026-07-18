@@ -75,7 +75,11 @@ def test_doctor_warns_when_opencode_loads_canonical_instructions_twice(sandbox_w
     assert "OpenCode loads the canonical AGENTS.md 2 times" in result.stdout
 
 
-def test_doctor_surfaces_unsafe_and_accumulated_claude_permissions(sandbox):
+def test_doctor_does_not_judge_host_local_claude_permissions(sandbox):
+    # Permission posture is a host-local choice the engine must not grade:
+    # bypassPermissions, a suppressed dangerous-mode prompt, and persistent
+    # allow rules are all legitimate depending on the machine. The doctor
+    # never comments on them (0.91.3 dropped the Claude-only judgement).
     claude_dir = sandbox.home / ".claude"
     claude_dir.mkdir(parents=True, exist_ok=True)
     (claude_dir / "settings.json").write_text(
@@ -92,9 +96,10 @@ def test_doctor_surfaces_unsafe_and_accumulated_claude_permissions(sandbox):
 
     result = run_agent_doctor(sandbox)
 
-    assert "Claude defaultMode=bypassPermissions" in result.stdout
-    assert "Claude suppresses the dangerous-mode permission warning" in result.stdout
-    assert "Claude has 2 unmanaged persistent allow rule(s)" in result.stdout
+    assert "bypassPermissions" not in result.stdout
+    assert "dangerous-mode" not in result.stdout
+    assert "unmanaged persistent allow rule" not in result.stdout
+    assert "Claude security posture" not in result.stdout
 
 
 def test_vault_library_probe_uses_mcp_protocol_headers():

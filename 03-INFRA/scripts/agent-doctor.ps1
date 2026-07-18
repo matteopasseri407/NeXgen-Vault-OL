@@ -657,45 +657,30 @@ if ($ollama) {
   }
 } else { warn "ollama not in PATH (local worker unavailable)" }
 
-sec "Claude security posture"
 $settingsPath = Join-Path $HomeDir ".claude\settings.json"
-$settingsLocalPath = Join-Path $HomeDir ".claude\settings.local.json"
-$claudeBypass = $false
-if (Test-Path -LiteralPath $settingsPath) {
-  try {
-    $claudeSettings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
-    $claudeBypass = $claudeSettings.permissions.defaultMode -eq "bypassPermissions"
-    if ($claudeBypass) { warn "Claude defaultMode=bypassPermissions on a networked host; use auto or acceptEdits unless this machine is an isolated sandbox" }
-    else { ok "Claude does not default to bypassPermissions" }
-    if ($claudeSettings.skipDangerousModePermissionPrompt -eq $true) { warn "Claude suppresses the dangerous-mode permission warning" }
-  } catch { warn "Claude settings.json is invalid; permission posture was not checked" }
-}
-if (Test-Path -LiteralPath $settingsLocalPath) {
-  try {
-    $claudeLocalSettings = Get-Content -Raw -LiteralPath $settingsLocalPath | ConvertFrom-Json
-    $persistentAllows = @($claudeLocalSettings.permissions.allow | Where-Object { $_ -is [string] -and $_.Trim() })
-    if ($persistentAllows.Count -gt 0) {
-      $suffix = if ($claudeBypass) { "; they are redundant while bypassPermissions is active" } else { "" }
-      warn "Claude has $($persistentAllows.Count) unmanaged persistent allow rule(s) in settings.local.json$suffix"
-    }
-  } catch { warn "Claude settings.local.json is invalid; persistent permission grants were not checked" }
-}
 
 sec "Claude authentication"
-$claude = Get-Command claude -ErrorAction SilentlyContinue
-if ($claude) {
-  $claudeAuthRaw = ((& claude auth status 2>$null) -join "`n").Trim()
-  if ($claudeAuthRaw) {
-    try {
-      $claudeAuth = $claudeAuthRaw | ConvertFrom-Json
-      if ($claudeAuth.loggedIn -eq $true) { ok "Claude authentication is active" }
-      else { bad "Claude is not authenticated; run: claude auth login" }
+# Only meaningful when Claude is actually used on this host (the
+# layer-managed settings.json). Absent -> Claude isn't part of this install,
+# so a logged-out CLI is not this host's problem and we stay silent. How the
+# user configures Claude's own permissions is a host-local choice, not
+# something the engine grades (see CHANGELOG 0.91.3).
+if (Test-Path -LiteralPath $settingsPath) {
+  $claude = Get-Command claude -ErrorAction SilentlyContinue
+  if ($claude) {
+    $claudeAuthRaw = ((& claude auth status 2>$null) -join "`n").Trim()
+    if ($claudeAuthRaw) {
+      try {
+        $claudeAuth = $claudeAuthRaw | ConvertFrom-Json
+        if ($claudeAuth.loggedIn -eq $true) { ok "Claude authentication is active" }
+        else { bad "Claude is not authenticated; run: claude auth login" }
+      }
+      catch { warn "Claude auth status returned unreadable output; run: claude auth status" }
     }
-    catch { warn "Claude auth status returned unreadable output; run: claude auth status" }
+    else { warn "Claude auth status returned no output; run: claude auth status" }
   }
-  else { warn "Claude auth status returned no output; run: claude auth status" }
+  else { warn "Claude is configured on this host but 'claude' is not in PATH" }
 }
-else { warn "claude not in PATH (Claude authentication not checked)" }
 
 sec "Claude hooks (vault checkpoint/briefing)"
 if (Test-Path -LiteralPath $settingsPath) {

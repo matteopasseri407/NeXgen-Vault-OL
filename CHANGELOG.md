@@ -8,6 +8,15 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## [0.91.3] - 2026-07-18
+
+The doctor no longer grades how you configure your own CLI permissions. Permission posture is a host-local choice, not product policy.
+
+### Changed
+
+- `agent-doctor` dropped the "Claude security posture" section: it no longer comments on `bypassPermissions`, a suppressed dangerous-mode prompt, or persistent allow rules. Those are legitimate host-local choices (an isolated sandbox, a deliberate autonomous workflow), and singling out Claude while every other CLI's bypass modes went unchecked was an inconsistency, the same "one maintainer's config as product policy" anti-pattern that 0.91.2 removed for local models.
+- The "Claude authentication" check is now gated on Claude actually being used on the host (a layer-managed `~/.claude/settings.json`). A user who does not run Claude no longer gets a logged-out FAIL they cannot act on.
+
 ## [0.91.2] - 2026-07-17
 
 Migration hardening for Windows hosts upgraded through older NeXgen layouts. Fresh installs were not affected by these accumulated-state problems.

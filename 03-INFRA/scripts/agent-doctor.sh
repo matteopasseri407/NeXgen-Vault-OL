@@ -767,59 +767,30 @@ if [ "$HOST" = linux ]; then
   fi
 fi
 
-sec "Claude security posture"
 SETTINGS="$HOME/.claude/settings.json"
-SETTINGS_LOCAL="$HOME/.claude/settings.local.json"
-claude_security="$(python3 - "$SETTINGS" "$SETTINGS_LOCAL" <<'PY' 2>/dev/null
-import json, pathlib, sys
-settings_path, local_path = map(pathlib.Path, sys.argv[1:])
-mode = ""
-skip = False
-allow_count = 0
-if settings_path.is_file():
-    data = json.loads(settings_path.read_text(encoding="utf-8"))
-    mode = data.get("permissions", {}).get("defaultMode", "")
-    skip = data.get("skipDangerousModePermissionPrompt") is True
-if local_path.is_file():
-    local = json.loads(local_path.read_text(encoding="utf-8"))
-    allow_count = sum(isinstance(item, str) and bool(item.strip()) for item in local.get("permissions", {}).get("allow", []))
-print(f"{mode}|{int(skip)}|{allow_count}")
-PY
-)"
-if [ -n "$claude_security" ]; then
-  claude_mode="${claude_security%%|*}"
-  claude_tail="${claude_security#*|}"
-  claude_skip="${claude_tail%%|*}"
-  claude_allow_count="${claude_tail##*|}"
-  if [ "$claude_mode" = bypassPermissions ]; then
-    warn "Claude defaultMode=bypassPermissions on a networked host; use auto or acceptEdits unless this machine is an isolated sandbox"
-  else
-    ok "Claude does not default to bypassPermissions"
-  fi
-  [ "$claude_skip" = 1 ] && warn "Claude suppresses the dangerous-mode permission warning"
-  if [ "${claude_allow_count:-0}" -gt 0 ] 2>/dev/null; then
-    claude_suffix=""
-    [ "$claude_mode" = bypassPermissions ] && claude_suffix="; they are redundant while bypassPermissions is active"
-    warn "Claude has $claude_allow_count unmanaged persistent allow rule(s) in settings.local.json$claude_suffix"
-  fi
-else
-  warn "Claude settings could not be inspected; permission posture was not checked"
-fi
 
 sec "Claude authentication"
-if command -v claude >/dev/null 2>&1; then
-  claude_auth="$(claude auth status 2>/dev/null || true)"
-  if printf '%s' "$claude_auth" | grep -Eq '"loggedIn"[[:space:]]*:[[:space:]]*true'; then
-    ok "Claude authentication is active"
-  elif printf '%s' "$claude_auth" | grep -Eq '"loggedIn"[[:space:]]*:[[:space:]]*false'; then
-    fail "Claude is not authenticated; run: claude auth login"
-  elif [ -n "$claude_auth" ]; then
-    warn "Claude auth status returned unreadable output; run: claude auth status"
+# Only meaningful when Claude is actually used on this host: the
+# layer-managed settings.json is the signal. Without it Claude isn't part of
+# this install, so a logged-out CLI is not this host's problem -- stay silent
+# instead of raising a FAIL a non-Claude user cannot act on. How the user
+# configures Claude's own permissions is a host-local choice, not something
+# the engine grades (see CHANGELOG 0.91.3).
+if [ -f "$SETTINGS" ]; then
+  if command -v claude >/dev/null 2>&1; then
+    claude_auth="$(claude auth status 2>/dev/null || true)"
+    if printf '%s' "$claude_auth" | grep -Eq '"loggedIn"[[:space:]]*:[[:space:]]*true'; then
+      ok "Claude authentication is active"
+    elif printf '%s' "$claude_auth" | grep -Eq '"loggedIn"[[:space:]]*:[[:space:]]*false'; then
+      fail "Claude is not authenticated; run: claude auth login"
+    elif [ -n "$claude_auth" ]; then
+      warn "Claude auth status returned unreadable output; run: claude auth status"
+    else
+      warn "Claude auth status returned no output; run: claude auth status"
+    fi
   else
-    warn "Claude auth status returned no output; run: claude auth status"
+    warn "Claude is configured on this host but 'claude' is not in PATH"
   fi
-else
-  warn "claude not in PATH (Claude authentication not checked)"
 fi
 
 sec "Claude hooks (vault checkpoint/briefing)"
