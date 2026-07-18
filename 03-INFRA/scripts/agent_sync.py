@@ -2135,6 +2135,23 @@ def _skill_inventory(manifest_names, materialized):
     return canonical, extras, missing
 
 
+def _claude_memory_stats(projects_dir: Path):
+    """Count Claude Code native-memory fact files per project
+    (~/.claude/projects/<enc>/memory/*.md). These are structured, durable facts
+    eligible for confluence into the vault (unlike the other CLIs' session
+    transcripts). Pure and testable; returns [(project, fact_count), ...]."""
+    stats = []
+    if not projects_dir.is_dir():
+        return stats
+    for proj in sorted(projects_dir.iterdir()):
+        mem = proj / "memory"
+        if not mem.is_dir():
+            continue
+        facts = [p for p in mem.iterdir() if p.is_file() and p.suffix == ".md"]
+        stats.append((proj.name, len(facts)))
+    return stats
+
+
 def _inventory_cli(argv: list[str]) -> int:
     """Read-only onboarding scan of the whole setup: MCP servers (via
     render.py --inventory), skills (manifest vs materialized library), and
@@ -2185,6 +2202,24 @@ def _inventory_cli(argv: list[str]) -> int:
     ]
     for label, path in bootstraps:
         print(f"  {label}: {'present' if path.exists() else 'not configured on this machine'}")
+
+    print("")
+    print(">>> Onboarding inventory -- native memory (read-only):")
+    mem_stats = _claude_memory_stats(env.home / ".claude" / "projects")
+    if mem_stats:
+        total = sum(n for _, n in mem_stats)
+        with_facts = [p for p in mem_stats if p[1]]
+        print(f"  claude: {total} structured memory fact(s) across {len(with_facts)} project(s) -- confluence-eligible into the vault")
+    else:
+        print("  claude: no structured native memory found")
+    transcript_stores = [
+        ("codex", env.home / ".codex" / "sessions"),
+        ("opencode", env.home / ".local" / "share" / "opencode" / "storage"),
+        ("antigravity", env.home / ".gemini" / "antigravity-cli"),
+    ]
+    for label, path in transcript_stores:
+        if path.exists():
+            print(f"  {label}: session transcripts present -- distillation deferred to v0.93, not imported")
 
     print("")
     print(">>> Read-only. Adopt (canonize) or reset what's out-of-manifest via the onboarding flow.")

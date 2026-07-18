@@ -26,3 +26,20 @@ def test_skill_manifest_names_reads_mapping_keys(sandbox, tmp_path):
     assert mod._skill_manifest_names(manifest) == {"vault-doctor", "vault-map"}
     # absent manifest -> None (caller skips the skill section, no false 'all stray')
     assert mod._skill_manifest_names(tmp_path / "nope.yaml") is None
+
+
+def test_claude_memory_stats_counts_facts_per_project(sandbox, tmp_path):
+    mod = load_agent_sync_module(sandbox)
+    projects = tmp_path / "projects"
+    (projects / "projA" / "memory").mkdir(parents=True)
+    (projects / "projA" / "memory" / "fact1.md").write_text("x", encoding="utf-8")
+    (projects / "projA" / "memory" / "fact2.md").write_text("x", encoding="utf-8")
+    (projects / "projB" / "memory").mkdir(parents=True)   # memory dir, no facts
+    (projects / "projC").mkdir()                          # no memory dir -> excluded
+
+    stats = dict(mod._claude_memory_stats(projects))
+    assert stats["projA"] == 2
+    assert stats["projB"] == 0
+    assert "projC" not in stats
+    # absent projects dir -> empty, never crashes
+    assert mod._claude_memory_stats(tmp_path / "absent") == []
