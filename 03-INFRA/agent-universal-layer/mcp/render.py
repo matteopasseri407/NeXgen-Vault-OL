@@ -978,11 +978,11 @@ def cmd_revert(cli):
     Exit: 0 restored or already-current, 1 no backup to restore, 2 the backup
     itself does not parse, 3 config not present."""
     path = _cli_config_path(cli)
-    if not path.exists():
-        print(f">>> {path.name} not present: nothing to revert for {cli}.")
-        return 3
     backups = sorted(path.parent.glob(path.name + ".bak-*"))
     if not backups:
+        if not path.exists():
+            print(f">>> {path.name} not present: nothing to revert for {cli}.")
+            return 3
         print(f">>> no {path.name}.bak-* backup found: nothing to revert (render.py writes one on every change).")
         return 1
     latest = backups[-1]
@@ -992,6 +992,12 @@ def cmd_revert(cli):
     except (json.JSONDecodeError, TOMLDecodeError, ValueError) as e:
         print(f">>> STOP: the backup {latest.name} does not parse ({e}); refusing to restore a broken file.")
         return 2
+    if not path.exists():
+        # The file was removed (e.g. by --reset): restore it straight from the
+        # newest backup. There is no current state to preserve first.
+        _atomic_write_text(path, restored, "utf-8")
+        print(f">>> RESTORED {path.name} from {latest.name} (was absent, e.g. after --reset).")
+        return 0
     current = path.read_text("utf-8")
     if current == restored:
         print(f">>> {path.name} already matches the latest backup {latest.name}: nothing to revert.")
@@ -1000,6 +1006,22 @@ def cmd_revert(cli):
     _prune_backups(path)
     _atomic_write_text(path, restored, "utf-8")
     print(f">>> REVERTED {path.name} from {latest.name} (current state saved as {safety.name}).")
+    return 0
+
+
+def cmd_reset(cli):
+    """Onboarding reset: back up this CLI's whole native config, then remove it
+    so a fresh provision (agent-sync apply) recreates it clean. The inverse of
+    --revert, and reversible by it: `render.py --revert CLI` restores the file
+    from the backup written here.
+    Exit: 0 reset (or already absent)."""
+    path = _cli_config_path(cli)
+    if not path.exists():
+        print(f">>> {cli}: {path.name} not present -- already clean, nothing to reset.")
+        return 0
+    bak = _secure_backup(path, path.read_text("utf-8"), "utf-8")
+    path.unlink()
+    print(f">>> RESET {cli}: removed {path.name} (backup {bak.name}). Undo with: render.py --revert {cli}. Re-provision clean with: agent-sync apply.")
     return 0
 
 def _bearer_var(auth_value):
@@ -1260,6 +1282,8 @@ def main():
                      help="restore a CLI's native config from the most recent render.py .bak-* backup (backs up the current file first).")
     ap.add_argument("--adopt", metavar="CLI", choices=list(CLI),
                      help="read-only: print DRAFT manifest.yaml entries for servers in a CLI's live config that aren't in the manifest yet.")
+    ap.add_argument("--reset", metavar="CLI", choices=list(CLI),
+                     help="onboarding: back up and remove a CLI's whole native config so a fresh provision recreates it clean (reversible via --revert).")
     ap.add_argument("--inventory", action="store_true",
                      help="read-only onboarding scan across all CLIs: MCP servers per CLI, canonical vs out-of-manifest (foundation of the adopt/reset flow).")
     ap.add_argument("--apply", action="store_true",
@@ -1273,6 +1297,8 @@ def main():
         return cmd_adopt(args.adopt, apply=args.apply)
     if args.revert:
         return cmd_revert(args.revert)
+    if args.reset:
+        return cmd_reset(args.reset)
     if args.write:
         return cmd_write(args.write)
     return cmd_diff()
