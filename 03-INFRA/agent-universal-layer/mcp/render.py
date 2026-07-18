@@ -1160,6 +1160,42 @@ def cmd_write(cli):
     print(f"--write for '{cli}' not implemented yet.")
     return 1
 
+def cmd_inventory():
+    """Read-only onboarding scan across every supported CLI: report the MCP
+    servers each one currently mounts, split into canonical (already in the
+    manifest) and out-of-manifest extras. This is the foundation the
+    adopt/reset onboarding flow builds on; skill, config, and native-memory
+    slices are added on top. Exit: 0 always (pure report), 2 manifest error."""
+    try:
+        raw, _retired = load_mcp_manifest_document(MANIFEST)
+    except ConfigValidationError as exc:
+        print(f">>> STOP: invalid MCP manifest ({exc}). Fix the data source before retrying.", file=sys.stderr)
+        return 2
+    print(">>> Onboarding inventory -- MCP servers per CLI (read-only):")
+    total_extras = 0
+    for cli in CLI:
+        manifest_keys = {CLI[cli]["name"](name) for name in raw}
+        try:
+            live = load_current(cli)
+        except SystemExit:
+            print(f"  {cli}: live config unreadable (see STOP above) -- skipped")
+            continue
+        if live is None:
+            print(f"  {cli}: not configured on this machine")
+            continue
+        canonical = sorted(k for k in live if k in manifest_keys)
+        extras = sorted(k for k in live if k not in manifest_keys)
+        total_extras += len(extras)
+        print(f"  {cli}: {len(live)} MCP server(s) -- {len(canonical)} canonical, {len(extras)} out-of-manifest")
+        if extras:
+            print(f"      out-of-manifest: {', '.join(extras)}")
+    print("")
+    if total_extras:
+        print(f">>> {total_extras} out-of-manifest server(s) across CLIs: adopt them (render.py --adopt <cli>) or drop them in the onboarding flow.")
+    else:
+        print(">>> Every mounted MCP server is already canonical.")
+    return 0
+
 def main():
     ap = argparse.ArgumentParser(description="MCP generator from a single manifest (Vault 2.0 Phase 1).")
     ap.add_argument("--write", metavar="CLI", choices=list(CLI), help="regenerate a CLI's MCP config (default: diff only).")
@@ -1169,7 +1205,11 @@ def main():
                      help="restore a CLI's native config from the most recent render.py .bak-* backup (backs up the current file first).")
     ap.add_argument("--adopt", metavar="CLI", choices=list(CLI),
                      help="read-only: print DRAFT manifest.yaml entries for servers in a CLI's live config that aren't in the manifest yet.")
+    ap.add_argument("--inventory", action="store_true",
+                     help="read-only onboarding scan across all CLIs: MCP servers per CLI, canonical vs out-of-manifest (foundation of the adopt/reset flow).")
     args = ap.parse_args()
+    if args.inventory:
+        return cmd_inventory()
     if args.expected_servers:
         return cmd_expected_servers(args.expected_servers)
     if args.adopt:
