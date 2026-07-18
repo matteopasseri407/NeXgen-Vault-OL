@@ -8,6 +8,12 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## [0.91.4] - 2026-07-18
+
+### Added
+
+- `council allow-training on|off|status`: a host-local, persistent toggle for the zero-retention gate. When on, Council seats without a verified zero-retention guarantee run without repeating `--allow-training-risk` on every call; the default (off) keeps the protection on. The preference lives per-machine under the Council state directory and never touches shared data. Both zero-retention block messages now point at the command, so enabling it is discoverable instead of a flag to memorize.
+
 ## [0.91.3] - 2026-07-18
 
 The doctor no longer grades how you configure your own CLI permissions. Permission posture is a host-local choice, not product policy.

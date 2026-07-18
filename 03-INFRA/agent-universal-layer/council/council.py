@@ -113,6 +113,8 @@ if os.name == "nt":
 else:
     _LOCAL_STATE_ROOT = Path.home() / ".local" / "state"
 SESSIONS_DIR = _LOCAL_STATE_ROOT / "council" / "sessions"
+COUNCIL_STATE_DIR = _LOCAL_STATE_ROOT / "council"
+ALLOW_TRAINING_PREF_FILE = COUNCIL_STATE_DIR / "allow-training.enabled"
 DEFAULT_TTL_DAYS = 7
 DEFAULT_MAX_ROUNDS = 3
 DEFAULT_MAX_SEATS = 5
@@ -542,6 +544,22 @@ def _warn_if_explicit_codex_seat_not_default(seat_name: str, seat: dict) -> None
     )
 
 
+def _persistent_allow_training() -> bool:
+    """Host-local opt-in: when the marker file exists, seats without a verified
+    zero-retention guarantee are permitted without repeating --allow-training-risk
+    on every call. Toggled by `council allow-training on|off`; default (no file)
+    keeps the protection on."""
+    return ALLOW_TRAINING_PREF_FILE.is_file()
+
+
+def _fold_persistent_allow_training(args: argparse.Namespace) -> None:
+    """Fold the host-local persistent preference into the per-call flag, so the
+    zero-retention gate (which reads args.allow_training_risk) honours the toggle
+    without the flag. The allow-training command itself must not be affected."""
+    if getattr(args, "func", None) is not cmd_allow_training and _persistent_allow_training():
+        args.allow_training_risk = True
+
+
 def _check_seat_allowed(seat_name: str, seat: dict, args: argparse.Namespace) -> None:
     # Fail-fast UX layer only -- the authoritative check is in run_seat,
     # immediately before process spawn. See AGY_BLOCK_REASON.
@@ -550,9 +568,9 @@ def _check_seat_allowed(seat_name: str, seat: dict, args: argparse.Namespace) ->
     if not seat.get("zero_retention", False) and not args.allow_training_risk:
         sys.exit(
             f"[council] STOP: il seat '{seat_name}' NON ha garanzia zero-retention "
-            "(i dati inviati possono finire nel training del modello). "
-            "Usa --allow-training-risk solo per test tecnici con contenuto non sensibile, "
-            "mai per brief reali."
+            "(i dati inviati possono finire nel training del modello).\n"
+            "  Per una singola chiamata: aggiungi --allow-training-risk (solo contenuto non sensibile).\n"
+            "  Se ti sta bene usare questi modelli su questa macchina: council allow-training on"
         )
 
 
@@ -1700,7 +1718,8 @@ def _run_relay_stage(
             reset = quarantine.next_reset_iso(pools)
             reset_msg = f" Reset piu' vicino: {reset}." if reset else ""
             risk_msg = (
-                " Seat senza zero-retention sono stati esclusi: usa --allow-training-risk solo per test tecnici."
+                " Seat senza zero-retention esclusi: --allow-training-risk per una singola staffetta, "
+                "oppure 'council allow-training on' per consentirli su questo host."
                 if skipped_training_risk else ""
             )
             agy_msg = f" {AGY_BLOCK_REASON}" if skipped_agy else ""
@@ -1972,6 +1991,38 @@ def _add_common_args(parser: argparse.ArgumentParser, *, include_seat: bool = Tr
     )
 
 
+def cmd_allow_training(args: argparse.Namespace) -> None:
+    action = getattr(args, "state", "status")
+    if action == "status":
+        on = _persistent_allow_training()
+        state = (
+            "ON — i seat senza zero-retention partono senza flag"
+            if on else "OFF — protezione zero-retention attiva"
+        )
+        print(f"[council] allow-training: {state}")
+        print(f"  preferenza host-local: {ALLOW_TRAINING_PREF_FILE}")
+        return
+    if action == "on":
+        COUNCIL_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        ALLOW_TRAINING_PREF_FILE.write_text(
+            "Council: rischio training consentito su questo host.\n"
+            "Rimuovi questo file (o esegui: council allow-training off) per ripristinare la protezione.\n",
+            encoding="utf-8",
+        )
+        print(
+            "[council] allow-training ON su questo host: i seat senza garanzia zero-retention "
+            "ora partono senza --allow-training-risk.\n"
+            "  Vale solo per questa macchina. Ripristina con: council allow-training off"
+        )
+        return
+    # off
+    ALLOW_TRAINING_PREF_FILE.unlink(missing_ok=True)
+    print(
+        "[council] allow-training OFF: protezione zero-retention ripristinata su questo host. "
+        "Per una singola chiamata usa --allow-training-risk."
+    )
+
+
 def main() -> int:
     _install_shutdown_handlers()
     ap = argparse.ArgumentParser(prog="council", description=__doc__)
@@ -2040,7 +2091,18 @@ def main() -> int:
     )
     propose.set_defaults(func=cmd_propose)
 
+    allow_training = sub.add_parser(
+        "allow-training",
+        help="consenti/blocca in modo persistente i seat senza zero-retention su questo host",
+    )
+    allow_training.add_argument(
+        "state", nargs="?", choices=("on", "off", "status"), default="status",
+        help="on = consenti i seat non-zero-retention senza flag; off = ripristina la protezione; status = stato attuale",
+    )
+    allow_training.set_defaults(func=cmd_allow_training)
+
     args = ap.parse_args()
+    _fold_persistent_allow_training(args)
     args.func(args)
     return 0
 
