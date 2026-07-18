@@ -29,6 +29,38 @@ Determina il profilo dalle risposte:
 
 In MINIMAL non saranno installati `agent-sync`, `agent-doctor`, `agent-healthcheck`, né il timer di sync: sono no-op perché c'è una sola fonte di verità su una sola CLI. La maggior parte delle regole "single source / cross-platform" del bootstrap resta valida come principio ma è pratica no-op.
 
+### Step 1.5: Presa in carico di un setup esistente
+
+Molti utenti non partono da un PC vergine: arrivano con delle CLI già usate e piene di roba propria, cioè server MCP, skill e vecchie config accumulate nel tempo. Prima di configurare, prendi in carico quello che c'è già.
+
+Esegui `python3 03-INFRA/scripts/agent_sync.py inventory`. È in sola lettura e non tocca niente. Mostra all'utente il report: quanti server MCP per ogni CLI e quali sono già canonici o fuori dal manifest, quante skill sono fuori dal manifest, e quanta memoria nativa è presente.
+
+Se il report non trova niente di sparso, cioè tutto è già canonico e non ci sono extra, dillo all'utente e prosegui con lo Step 2: è un setup pulito.
+
+Se invece trova roba fuori dal manifest, non decidere al posto suo. Chiedi come vuole partire, con questo menu a scelta numerata:
+
+```
+Ho trovato un setup già esistente sulle tue CLI. Come vuoi partire?
+[1] ADOTTA: metto in ordine quello che hai già, portandolo nella fonte canonica di NeXgen.
+[2] RIPARTI DA ZERO: faccio il backup di tutto, poi pulisco le config e reinstallo fresco.
+[3] SCELTA A MANO: ti mostro voce per voce, e per ognuna decidi tu.
+```
+
+In base alla scelta:
+
+- **[1] ADOTTA.**
+  - Server MCP: per ogni CLI con degli extra, esegui `python3 03-INFRA/agent-universal-layer/mcp/render.py --adopt <cli> --apply`. Fa il backup del manifest, aggiunge le voci sotto `servers:` e ri-valida, ripristinando l'originale se qualcosa non torna.
+  - Skill fuori dal manifest: per ognuna chiedi all'utente da dove viene, se è una sua skill già nel vault oppure una skill di terzi da un repo GitHub, aggiungi la voce a `03-INFRA/agent-universal-layer/skills/skills.manifest.yaml`, poi esegui `python3 03-INFRA/scripts/skills-sync.py --apply`.
+  - Memoria nativa di Claude: leggi i fatti in `~/.claude/projects/*/memory/*.md`, passali dal filtro della skill `knowledge-vault-hygiene`, e scrivi solo quelli durevoli nel vault tramite gli strumenti MCP di `vault-library`, mai a mano. Le trascrizioni di sessione di Codex, OpenCode e Antigravity non si importano in questa versione.
+- **[2] RIPARTI DA ZERO.**
+  - Per ogni CLI da azzerare esegui `python3 03-INFRA/agent-universal-layer/mcp/render.py --reset <cli>`, che fa il backup della config e la rimuove.
+  - Poi ricostruisci tutto pulito con il provisioning dello Step 6, che rigenera le config dai manifest canonici.
+  - Per tornare indietro, `python3 03-INFRA/agent-universal-layer/mcp/render.py --revert <cli>` ripristina la config dal backup.
+- **[3] SCELTA A MANO.**
+  - Vai voce per voce, ogni server MCP e ogni skill, e per ognuna chiedi: adotta, scarta, o lascia com'è. Poi esegui l'azione corrispondente tra quelle sopra.
+
+Alla fine di questo step il setup dell'utente è consolidato nel canonico oppure azzerato e pronto per l'install pulito. Prosegui con lo Step 2.
+
 ### Step 2: Popolamento del Profilo
 
 Usando le risposte, scrivi per l'utente il file `99-INDEX/USER-PROFILE.md` basandoti sul template già presente. Questo file mapperà:
@@ -152,6 +184,38 @@ Determine the profile from the answers:
 - 2+ CLIs or 2+ machines → `profile: MULTI`, `sync_method: agent-sync`.
 
 In MINIMAL, `agent-sync`, `agent-doctor`, `agent-healthcheck`, and the sync timer are not installed: they are no-ops because there is a single source of truth on a single CLI. The "propagate to all" rule does not fire. Most "single source / cross-platform" rules in the bootstrap remain valid as a principle but are no-op in practice.
+
+### Step 1.5: Take over an existing setup
+
+Most users do not start from a blank machine: they arrive with CLIs they already use, full of their own things, MCP servers, skills, and old configs piled up over time. Before you configure anything, take over what is already there.
+
+Run `python3 03-INFRA/scripts/agent_sync.py inventory`. It is read-only and touches nothing. Show the user the report: how many MCP servers per CLI and which are canonical or out-of-manifest, how many skills are out-of-manifest, and how much native memory is present.
+
+If the report finds nothing stray, meaning everything is already canonical and there are no extras, tell the user and continue with Step 2: it is a clean setup.
+
+If it finds out-of-manifest things, do not decide for them. Ask how they want to start, with this numbered menu:
+
+```
+I found an existing setup on your CLIs. How do you want to start?
+[1] ADOPT: I put what you already have in order, into NeXgen's canonical source.
+[2] START FRESH: I back everything up, then clear the configs and install clean.
+[3] PICK BY HAND: I show you item by item, and you decide for each.
+```
+
+Based on the choice:
+
+- **[1] ADOPT.**
+  - MCP servers: for each CLI with extras, run `python3 03-INFRA/agent-universal-layer/mcp/render.py --adopt <cli> --apply`. It backs up the manifest, appends the entries under `servers:`, and re-validates, restoring the original if anything is off.
+  - Out-of-manifest skills: for each, ask the user where it comes from, whether it is their own skill already in the vault or a third-party skill from a GitHub repo, add the entry to `03-INFRA/agent-universal-layer/skills/skills.manifest.yaml`, then run `python3 03-INFRA/scripts/skills-sync.py --apply`.
+  - Claude native memory: read the facts in `~/.claude/projects/*/memory/*.md`, pass them through the `knowledge-vault-hygiene` skill, and write only the durable ones into the vault via the `vault-library` MCP tools, never by hand. The session transcripts of Codex, OpenCode, and Antigravity are not imported in this version.
+- **[2] START FRESH.**
+  - For each CLI to reset, run `python3 03-INFRA/agent-universal-layer/mcp/render.py --reset <cli>`, which backs up the config and removes it.
+  - Then rebuild everything clean with the Step 6 provisioning, which regenerates the configs from the canonical manifests.
+  - To go back, `python3 03-INFRA/agent-universal-layer/mcp/render.py --revert <cli>` restores the config from the backup.
+- **[3] PICK BY HAND.**
+  - Go item by item, each MCP server and each skill, and for each ask: adopt, drop, or leave as is. Then run the matching action from above.
+
+By the end of this step the user's setup is either consolidated into the canonical source or reset and ready for a clean install. Continue with Step 2.
 
 ### Step 2: Profile population
 
