@@ -688,7 +688,7 @@ def test_host_wide_lock_rejects_second_manual_run(sandbox, monkeypatch):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink launcher behavior is covered on Linux and macOS.")
-def test_posix_utils_links_agent_sync_and_agent_doctor_launchers(sandbox, monkeypatch):
+def test_posix_utils_links_core_agent_launchers(sandbox, monkeypatch):
     # Real gap found in a 2026-07-13 follow-up: agent-sync/agent-doctor were
     # documented everywhere (README, INIT.md, both concept maps) as bare
     # commands, but utils() -- the only code that links anything onto PATH
@@ -706,13 +706,16 @@ def test_posix_utils_links_agent_sync_and_agent_doctor_launchers(sandbox, monkey
 
     agent_sync_link = sandbox.home / ".local" / "bin" / "agent-sync"
     agent_doctor_link = sandbox.home / ".local" / "bin" / "agent-doctor"
+    open_folder_link = sandbox.home / ".local" / "bin" / "agent-open-folder"
     assert agent_sync_link.is_symlink()
     assert agent_sync_link.resolve() == (sandbox.scripts_dir / "agent-sync.sh").resolve()
     assert agent_doctor_link.is_symlink()
     assert agent_doctor_link.resolve() == (sandbox.scripts_dir / "agent-doctor.sh").resolve()
+    assert open_folder_link.is_symlink()
+    assert open_folder_link.resolve() == (sandbox.scripts_dir / "agent-open-folder.sh").resolve()
 
 
-def test_windows_utils_installs_agent_sync_and_agent_doctor_command_wrappers(sandbox, monkeypatch):
+def test_windows_utils_installs_core_agent_command_wrappers(sandbox, monkeypatch):
     mod = load_agent_sync_module(sandbox)
     monkeypatch.setattr(mod, "IS_WINDOWS", True)
     monkeypatch.setenv("HOME", str(sandbox.home))
@@ -722,7 +725,7 @@ def test_windows_utils_installs_agent_sync_and_agent_doctor_command_wrappers(san
     env = mod.Env()
     mod.utils(env)
 
-    for name in ("agent-sync", "agent-doctor"):
+    for name in ("agent-sync", "agent-doctor", "agent-open-folder"):
         launcher = sandbox.home / ".local" / "bin" / f"{name}.ps1"
         wrapper = sandbox.home / ".local" / "bin" / f"{name}.cmd"
         assert launcher.exists(), f"{name}.ps1 launcher missing"

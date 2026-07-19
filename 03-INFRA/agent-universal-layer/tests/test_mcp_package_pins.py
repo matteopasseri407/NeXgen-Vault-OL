@@ -109,6 +109,15 @@ def test_playwright_wrapper_and_manifest_share_an_exact_pin():
     assert any("playwright-human-safe.mjs" in arg for arg in server["windows"]["args"])
 
 
+def test_playwright_wrapper_preserves_shared_chrome_downloads():
+    wrapper = PLAYWRIGHT_WRAPPER.read_text(encoding="utf-8")
+
+    assert "const DOWNLOAD_MARKER = 'agent-preserve-shared-downloads-patch-v1';" in wrapper
+    assert "Browser.setDownloadBehavior" in wrapper
+    assert "occurrences(fileChooserPatched, upstreamDownloadBehavior) !== 1" in wrapper
+    assert ".replace(upstreamDownloadBehavior, nativeDownloadBehavior)" in wrapper
+
+
 def test_playwright_wrapper_can_resolve_npm_without_spawning_a_cmd_shim():
     node = shutil.which("node")
     if not node:
