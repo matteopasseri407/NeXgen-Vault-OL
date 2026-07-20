@@ -154,7 +154,8 @@ def _copy_engine_scripts(sandbox: Sandbox) -> None:
         "check_required_rules.py",
         "agent-doctor.sh", "agent-doctor.ps1",
         "council.sh", "council.ps1", "vault-push.sh", "vault-push.ps1", "vault-groom.sh", "vault-groom.ps1",
-        "vault_groom_audit.py", "agent-now.sh", "agent-now.ps1", "firecrawl-local.sh", "firecrawl-local.ps1",
+        "vault_groom_audit.py", "agent-now.sh", "agent-now.ps1", "agent-open-folder.sh", "agent-open-folder.ps1",
+        "firecrawl-local.sh", "firecrawl-local.ps1",
     ):
         dst = sandbox.scripts_dir / name
         shutil.copy2(REAL_SCRIPTS / name, dst)

@@ -6,6 +6,18 @@
  * That blocks a human sharing the visible browser from using the native
  * chooser. This exact, fail-closed patch keeps human clicks native while
  * browser_file_upload targets the HTML input directly with setInputFiles().
+ *
+ * Playwright also changes Chromium's download behavior while attaching over
+ * CDP. That setting is global for Chrome's default profile, so its temporary
+ * artifact directory would steal a human download and make it disappear when
+ * the MCP session exits. Shared Chrome keeps its native download behavior.
+ *
+ * Upstream's TabsContext.newTab() never calls Page.bringToFront(), unlike
+ * selectTab(). On a real (non-headless) shared Chrome attached over CDP,
+ * Chromium throttles rendering for a tab that isn't frontmost, so every
+ * pointer-based action (click, hover, drag, drop — including file-drop
+ * uploads) on a freshly created tab hangs until the action timeout. This
+ * patch makes newTab() bring the tab to front too, matching selectTab().
  */
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -14,6 +26,8 @@ import path from 'node:path';
 
 const VERSION = '0.0.78';
 const MARKER = 'agent-human-file-chooser-patch-v1';
+const DOWNLOAD_MARKER = 'agent-preserve-shared-downloads-patch-v1';
+const NEW_TAB_FOCUS_MARKER = 'agent-focus-new-tab-patch-v1';
 const BACKUP_SUFFIX = `.${MARKER}.original`;
 
 const fileChooserListener = `          eventsHelper.addEventListener(p, "filechooser", (chooser) => {
@@ -74,6 +88,32 @@ const directUploadTool = `    uploadFile = defineTabTool({
         response2.addCode(\`await page.\${resolved}.setInputFiles(\${JSON.stringify(params2.paths)});\`);
       }
     });`;
+
+const upstreamDownloadBehavior = `        if (this._browser.options.name !== "clank" && this._options.acceptDownloads !== "internal-browser-default") {
+          promises2.push(this._browser._session.send("Browser.setDownloadBehavior", {
+            behavior: this._options.acceptDownloads === "accept" ? "allowAndName" : "deny",
+            browserContextId: this._browserContextId,
+            downloadPath: this._browser.options.downloadsPath,
+            eventsEnabled: true
+          }));
+        }`;
+
+const nativeDownloadBehavior = `        /* ${DOWNLOAD_MARKER}: a CDP-attached shared Chrome keeps its native Downloads directory. */`;
+
+const upstreamNewTab = `      async newTab() {
+        const browserContext = await this.ensureBrowserContext();
+        const page = await browserContext.newPage();
+        this._currentTab = this._tabs.find((t) => t.page === page);
+        return this._currentTab;
+      }`;
+
+const focusedNewTab = `      async newTab() {
+        const browserContext = await this.ensureBrowserContext();
+        const page = await browserContext.newPage();
+        await page.bringToFront(); // ${NEW_TAB_FOCUS_MARKER}: keep pointer actions unblocked on a shared Chrome.
+        this._currentTab = this._tabs.find((t) => t.page === page);
+        return this._currentTab;
+      }`;
 
 function withNodeOnPath() {
   const env = { ...process.env };
@@ -183,18 +223,44 @@ function occurrences(source, needle) {
 }
 
 function patchedSource(source, bundle) {
-  if (source.includes(MARKER)) {
+  const hasFileChooserPatch = source.includes(MARKER);
+  if (hasFileChooserPatch) {
     if (source.includes(fileChooserListener) || source.includes(upstreamUploadTool) || !source.includes(directUploadTool))
       throw new Error(`Invalid existing human-safe patch at ${bundle}.`);
-    return source;
+  } else if (occurrences(source, fileChooserListener) !== 1 || occurrences(source, upstreamUploadTool) !== 1) {
+    throw new Error(`Unsupported Playwright file-chooser bundle at ${bundle}. Refusing an unsafe partial patch.`);
   }
-  if (occurrences(source, fileChooserListener) !== 1 || occurrences(source, upstreamUploadTool) !== 1)
-    throw new Error(`Unsupported Playwright bundle at ${bundle}. Refusing an unsafe partial patch.`);
-  const patched = source
+
+  const fileChooserPatched = hasFileChooserPatch ? source : source
     .replace(fileChooserListener, `          /* ${MARKER}: native chooser remains available to the human. */`)
     .replace(upstreamUploadTool, directUploadTool);
+
+  const hasDownloadPatch = fileChooserPatched.includes(DOWNLOAD_MARKER);
+  if (hasDownloadPatch) {
+    if (fileChooserPatched.includes(upstreamDownloadBehavior))
+      throw new Error(`Invalid existing shared-download patch at ${bundle}.`);
+  } else if (occurrences(fileChooserPatched, upstreamDownloadBehavior) !== 1) {
+    throw new Error(`Unsupported Playwright download bundle at ${bundle}. Refusing an unsafe partial patch.`);
+  }
+
+  const downloadPatched = hasDownloadPatch ? fileChooserPatched : fileChooserPatched
+    .replace(upstreamDownloadBehavior, nativeDownloadBehavior);
+
+  const hasNewTabFocusPatch = downloadPatched.includes(NEW_TAB_FOCUS_MARKER);
+  if (hasNewTabFocusPatch) {
+    if (downloadPatched.includes(upstreamNewTab))
+      throw new Error(`Invalid existing new-tab-focus patch at ${bundle}.`);
+  } else if (occurrences(downloadPatched, upstreamNewTab) !== 1) {
+    throw new Error(`Unsupported Playwright tabs bundle at ${bundle}. Refusing an unsafe partial patch.`);
+  }
+
+  const patched = hasNewTabFocusPatch ? downloadPatched : downloadPatched
+    .replace(upstreamNewTab, focusedNewTab);
   if (!patched.includes(MARKER) || !patched.includes(directUploadTool)
-      || patched.includes(fileChooserListener) || patched.includes(upstreamUploadTool))
+      || !patched.includes(DOWNLOAD_MARKER)
+      || !patched.includes(NEW_TAB_FOCUS_MARKER) || !patched.includes(focusedNewTab)
+      || patched.includes(fileChooserListener) || patched.includes(upstreamUploadTool)
+      || patched.includes(upstreamDownloadBehavior) || patched.includes(upstreamNewTab))
     throw new Error(`Human-safe patch validation failed in memory for ${bundle}.`);
   return patched;
 }

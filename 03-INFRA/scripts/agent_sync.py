@@ -1015,6 +1015,7 @@ LINKED_COMMANDS: dict[str, dict[str, object]] = {
     "agent-sync":      {"source": "engine", "posix": True,  "windows": True},
     "agent-doctor":    {"source": "engine", "posix": True,  "windows": True},
     "agent-now":       {"source": "engine", "posix": True,  "windows": True},
+    "agent-open-folder": {"source": "engine", "posix": True, "windows": True},
     "council":         {"source": "engine", "posix": True,  "windows": True},
     "firecrawl-local": {"source": "engine", "posix": True,  "windows": True},
     "vault-push":      {"source": "engine", "posix": True,  "windows": True},
