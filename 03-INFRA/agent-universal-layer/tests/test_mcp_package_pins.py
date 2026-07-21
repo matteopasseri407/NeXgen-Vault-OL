@@ -103,9 +103,8 @@ def test_playwright_wrapper_and_manifest_share_an_exact_pin():
     assert _is_exact_npm_pin(f"@playwright/mcp@{match.group(1)}")
 
     server = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))["servers"]["playwright"]
-    assert server["command"] == "npx"
-    assert f"@playwright/mcp@{match.group(1)}" in server["args"]
-    assert server["windows"]["command"] == "node"
+    assert server["command"] == "node"
+    assert any("playwright-human-safe.mjs" in arg for arg in server["args"])
     assert any("playwright-human-safe.mjs" in arg for arg in server["windows"]["args"])
 
 
@@ -123,8 +122,17 @@ def test_playwright_wrapper_focuses_newly_created_tabs():
 
     assert "const NEW_TAB_FOCUS_MARKER = 'agent-focus-new-tab-patch-v1';" in wrapper
     assert "await page.bringToFront();" in wrapper
-    assert "occurrences(downloadPatched, upstreamNewTab) !== 1" in wrapper
+    assert "occurrences(cdpDisposalPatched, upstreamNewTab) !== 1" in wrapper
     assert ".replace(upstreamNewTab, focusedNewTab)" in wrapper
+
+
+def test_playwright_wrapper_detaches_from_a_shared_cdp_context():
+    wrapper = PLAYWRIGHT_WRAPPER.read_text(encoding="utf-8")
+
+    assert "const CDP_DISPOSAL_MARKER = 'agent-preserve-shared-cdp-context-patch-v1';" in wrapper
+    assert "config.browser.cdpEndpoint" in wrapper
+    assert "function patchCdpDisposal(source, bundle)" in wrapper
+    assert "Refusing an unsafe partial patch" in wrapper
 
 
 def test_playwright_wrapper_can_resolve_npm_without_spawning_a_cmd_shim():

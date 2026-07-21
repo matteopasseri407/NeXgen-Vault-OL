@@ -18,6 +18,11 @@
  * pointer-based action (click, hover, drag, drop — including file-drop
  * uploads) on a freshly created tab hangs until the action timeout. This
  * patch makes newTab() bring the tab to front too, matching selectTab().
+ *
+ * An MCP client disposal also closes the BrowserContext it received from
+ * Chromium. That is correct for an MCP-owned browser, but fatal for the
+ * user's persistent Chrome attached with --cdp-endpoint. In that case this
+ * wrapper must detach only, leaving the visible browser and its context alive.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -28,6 +33,7 @@ const VERSION = '0.0.78';
 const MARKER = 'agent-human-file-chooser-patch-v1';
 const DOWNLOAD_MARKER = 'agent-preserve-shared-downloads-patch-v1';
 const NEW_TAB_FOCUS_MARKER = 'agent-focus-new-tab-patch-v1';
+const CDP_DISPOSAL_MARKER = 'agent-preserve-shared-cdp-context-patch-v1';
 const BACKUP_SUFFIX = `.${MARKER}.original`;
 
 const fileChooserListener = `          eventsHelper.addEventListener(p, "filechooser", (chooser) => {
@@ -114,6 +120,20 @@ const focusedNewTab = `      async newTab() {
         this._currentTab = this._tabs.find((t) => t.page === page);
         return this._currentTab;
       }`;
+
+const cdpDisposalBackendAnchor = 'const browserContext = backend.browserContext;';
+const cdpDisposalReset = '        sharedBrowserPromise = void 0;';
+const cdpDisposalBrowserClose = `        await browserContext.browser()?.close().catch(() => {
+        });`;
+const guardedCdpDisposal = `${cdpDisposalReset}
+        if (config.browser.cdpEndpoint) {
+          /* ${CDP_DISPOSAL_MARKER}: an attached personal Chrome owns this context. */
+          return;
+        }
+        await browserContext.close().catch(() => {
+        });
+        await browserContext.browser()?.close().catch(() => {
+        });`;
 
 function withNodeOnPath() {
   const env = { ...process.env };
@@ -222,6 +242,33 @@ function occurrences(source, needle) {
   return source.split(needle).length - 1;
 }
 
+function patchCdpDisposal(source, bundle) {
+  const hasCdpDisposalPatch = source.includes(CDP_DISPOSAL_MARKER);
+  if (hasCdpDisposalPatch) {
+    const markerAt = source.indexOf(CDP_DISPOSAL_MARKER);
+    const guard = source.slice(Math.max(0, markerAt - 160), markerAt + 220);
+    if (!guard.includes('config.browser.cdpEndpoint') || !guard.includes('return;'))
+      throw new Error(`Invalid existing shared-CDP disposal patch at ${bundle}.`);
+    return source;
+  }
+
+  const backendAt = source.indexOf(cdpDisposalBackendAnchor);
+  if (backendAt < 0 || source.indexOf(cdpDisposalBackendAnchor, backendAt + 1) >= 0)
+    throw new Error(`Unsupported Playwright disposal bundle at ${bundle}. Refusing an unsafe partial patch.`);
+  const resetAt = source.indexOf(cdpDisposalReset, backendAt);
+  const browserCloseAt = source.indexOf(cdpDisposalBrowserClose, resetAt);
+  if (resetAt < 0 || browserCloseAt < resetAt)
+    throw new Error(`Unsupported Playwright CDP disposal block at ${bundle}. Refusing an unsafe partial patch.`);
+
+  const upstreamDisposal = source.slice(resetAt, browserCloseAt + cdpDisposalBrowserClose.length);
+  if (occurrences(upstreamDisposal, 'await browserContext.close().catch(() => {') !== 1
+      || occurrences(upstreamDisposal, 'await browserContext.browser()?.close().catch(() => {') !== 1)
+    throw new Error(`Unexpected Playwright CDP disposal block at ${bundle}. Refusing an unsafe partial patch.`);
+
+  return source.slice(0, resetAt) + guardedCdpDisposal
+    + source.slice(browserCloseAt + cdpDisposalBrowserClose.length);
+}
+
 function patchedSource(source, bundle) {
   const hasFileChooserPatch = source.includes(MARKER);
   if (hasFileChooserPatch) {
@@ -246,19 +293,22 @@ function patchedSource(source, bundle) {
   const downloadPatched = hasDownloadPatch ? fileChooserPatched : fileChooserPatched
     .replace(upstreamDownloadBehavior, nativeDownloadBehavior);
 
-  const hasNewTabFocusPatch = downloadPatched.includes(NEW_TAB_FOCUS_MARKER);
+  const cdpDisposalPatched = patchCdpDisposal(downloadPatched, bundle);
+
+  const hasNewTabFocusPatch = cdpDisposalPatched.includes(NEW_TAB_FOCUS_MARKER);
   if (hasNewTabFocusPatch) {
-    if (downloadPatched.includes(upstreamNewTab))
+    if (cdpDisposalPatched.includes(upstreamNewTab))
       throw new Error(`Invalid existing new-tab-focus patch at ${bundle}.`);
-  } else if (occurrences(downloadPatched, upstreamNewTab) !== 1) {
+  } else if (occurrences(cdpDisposalPatched, upstreamNewTab) !== 1) {
     throw new Error(`Unsupported Playwright tabs bundle at ${bundle}. Refusing an unsafe partial patch.`);
   }
 
-  const patched = hasNewTabFocusPatch ? downloadPatched : downloadPatched
+  const patched = hasNewTabFocusPatch ? cdpDisposalPatched : cdpDisposalPatched
     .replace(upstreamNewTab, focusedNewTab);
   if (!patched.includes(MARKER) || !patched.includes(directUploadTool)
       || !patched.includes(DOWNLOAD_MARKER)
       || !patched.includes(NEW_TAB_FOCUS_MARKER) || !patched.includes(focusedNewTab)
+      || !patched.includes(CDP_DISPOSAL_MARKER) || !patched.includes('if (config.browser.cdpEndpoint)')
       || patched.includes(fileChooserListener) || patched.includes(upstreamUploadTool)
       || patched.includes(upstreamDownloadBehavior) || patched.includes(upstreamNewTab))
     throw new Error(`Human-safe patch validation failed in memory for ${bundle}.`);

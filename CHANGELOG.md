@@ -8,6 +8,12 @@ This file tracks the **engine** (this repo). Your own data — manifests,
 instructions, skills, secrets — lives in your KnowledgeVault and is not part
 of any engine release.
 
+## [Unreleased]
+
+### Fixed
+
+- Every generated Playwright MCP configuration now launches the same human-safe wrapper on Linux and Windows. When the wrapper attaches to an existing Chrome over CDP, disconnecting an MCP client detaches safely instead of closing the user's browser context.
+
 ## [0.92.1] - 2026-07-19
 
 ### Fixed
