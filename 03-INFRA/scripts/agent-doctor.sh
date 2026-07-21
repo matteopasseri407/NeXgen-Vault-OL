@@ -345,14 +345,25 @@ elif connector_expected OCR_TUNNEL_PORT; then
 else
   ok "vault-ocr (33003): not reachable ($c) -- not expected in current Mode (Local-Only / OCR_TUNNEL_PORT not set)"
 fi
-if [ -n "${VAULT_LIBRARY_URL:-}" ]; then
+vault_library_url="${VAULT_LIBRARY_URL:-}"
+render_py="$ENGINE_UL/mcp/render.py"
+if command -v python3 >/dev/null 2>&1 && [ -f "$render_py" ]; then
+  rendered_vault_url="$(python3 "$render_py" --server-url vault-library 2>/dev/null)"
+  rendered_vault_rc=$?
+  if [ "$rendered_vault_rc" -eq 0 ] && [ -n "$rendered_vault_url" ]; then
+    vault_library_url="$rendered_vault_url"
+  elif [ "$rendered_vault_rc" -ne 3 ]; then
+    fail "vault-library endpoint cannot be derived from the rendered manifest"
+  fi
+fi
+if [ -n "$vault_library_url" ]; then
   # Streamable HTTP MCP rejects a generic GET without the protocol Accept
   # header. OPTIONS gives a bounded, authenticated route probe without
   # opening a response stream; a healthy endpoint answers 405 here.
   # Bearer token goes through a curl config file (bearer_cfg), not -H on
   # curl's own argv -- see bearer_cfg()'s comment for why.
   bearer_cfg "${VAULT_LIBRARY_TOKEN:-}"
-  c=$(code -X OPTIONS -K "$_LAST_BEARER_CFG" -H "Accept: application/json, text/event-stream" "$VAULT_LIBRARY_URL")
+  c=$(code -X OPTIONS -K "$_LAST_BEARER_CFG" -H "Accept: application/json, text/event-stream" "$vault_library_url")
   { [ "$c" = 200 ] || [ "$c" = 405 ]; } && ok "vault-library: $c (up)" || fail "vault-library: $c"
 else
   warn "VAULT_LIBRARY_URL not in env"

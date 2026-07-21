@@ -13,6 +13,7 @@ of any engine release.
 ### Fixed
 
 - Every generated Playwright MCP configuration now launches the same human-safe wrapper on Linux and Windows. When the wrapper attaches to an existing Chrome over CDP, disconnecting an MCP client detaches safely instead of closing the user's browser context.
+- MCP endpoint placeholders are now materialized before rendering for Claude, Codex, and Antigravity. Node-based clients no longer receive a literal `${VAULT_LIBRARY_URL}` or tunnel-port placeholder, while authentication remains an environment reference and is never written into generated configuration. The doctor now probes the endpoint actually rendered from the manifest, catching an invalid hardcoded route even when the tunnel health check is green.
 
 ## [0.92.1] - 2026-07-19
 

@@ -55,6 +55,59 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_runtime_endpoint_placeholders_materialize_for_node_clients(sandbox, monkeypatch):
+    """Node MCP clients do not expand shell syntax in config URLs themselves."""
+    monkeypatch.setenv("VAULT_LIBRARY_URL", "http://127.0.0.1:8081/mcp")
+    monkeypatch.delenv("FIRECRAWL_TUNNEL_PORT", raising=False)
+    mod = load_render_module(sandbox)
+    server = {
+        "transport": "http",
+        "url": "${VAULT_LIBRARY_URL}",
+        "url_env": "VAULT_LIBRARY_URL",
+        "auth": {"type": "bearer", "env": "VAULT_LIBRARY_TOKEN"},
+        "targets": ["claude", "codex", "antigravity", "opencode"],
+    }
+
+    endpoint = "http://127.0.0.1:8081/mcp"
+    view = mod.os_view(server)
+    assert view["url"] == endpoint
+    assert mod.r_claude("vault-library", view)["url"] == endpoint
+    assert mod.r_codex("vault-library", view)["url"] == endpoint
+    assert mod.r_antigravity("vault-library", view)["args"][1] == endpoint
+    # OpenCode owns a native environment-reference syntax, so keep its token
+    # and endpoint out of generated JSON just as before.
+    assert mod.r_opencode("vault-library", view)["url"] == "{env:VAULT_LIBRARY_URL}"
+
+    stdio = mod.os_view({
+        "transport": "stdio",
+        "command": "node",
+        "env": {"FIRECRAWL_API_URL": "http://127.0.0.1:${FIRECRAWL_TUNNEL_PORT:-33002}"},
+        "targets": ["claude"],
+    })
+    assert stdio["env"]["FIRECRAWL_API_URL"] == "http://127.0.0.1:33002"
+
+
+def test_server_url_reports_the_resolved_active_endpoint(sandbox, monkeypatch, capsys):
+    monkeypatch.setenv("VAULT_LIBRARY_URL", "http://127.0.0.1:8081/mcp")
+    (sandbox.mcp_dir / "manifest.yaml").write_text(
+        """schema_version: 1
+servers:
+  vault-library:
+    transport: http
+    url: "${VAULT_LIBRARY_URL}"
+    auth: { type: bearer, env: VAULT_LIBRARY_TOKEN }
+    require_env: VAULT_LIBRARY_URL
+    targets: [claude]
+""",
+        encoding="utf-8",
+    )
+    mod = load_render_module(sandbox)
+
+    assert mod.cmd_server_url("vault-library") == 0
+    assert capsys.readouterr().out.strip() == "http://127.0.0.1:8081/mcp"
+    assert mod.cmd_server_url("missing") == 3
+
+
 # ---- test 1: --diff rileva drift iniettato (per i 4 dialetti) --------------
 
 def test_diff_reports_injected_drift(sandbox_with_live_configs, capsys):

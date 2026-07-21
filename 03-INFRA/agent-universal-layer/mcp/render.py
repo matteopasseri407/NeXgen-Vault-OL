@@ -89,6 +89,7 @@ MCP_REMOTE_PACKAGE = "mcp-remote@0.1.38"
 
 SECRET_KEY = re.compile(r"(token|secret|password|authorization|bearer|api[_-]?key|cookie)", re.I)
 LONGTOK = re.compile(r"^[A-Za-z0-9_\-\.=+/]{40,}$")
+RUNTIME_ENV_PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
 def _resolve_windows_command(command):
@@ -163,6 +164,43 @@ def _expand_local_path_placeholders(server):
             expanded[field] = materialized
         elif value is not None:
             expanded[field] = materialized[0]
+    return expanded
+
+
+def _expand_runtime_env_value(value):
+    """Materialize non-sensitive ${VAR} and ${VAR:-default} placeholders.
+
+    MCP clients parse their config as data, not through a shell.  Leaving a
+    URL such as ``${VAULT_LIBRARY_URL}`` in a Node-based client therefore
+    reaches ``new URL()`` literally and fails before the MCP can connect.
+    Secret-shaped variables are deliberately never copied into generated
+    config; bearer auth stays an environment reference in each CLI dialect.
+    """
+    if not isinstance(value, str):
+        return value
+
+    def replace(match):
+        variable, default = match.groups()
+        if SECRET_KEY.search(variable):
+            return match.group(0)
+        configured = os.environ.get(variable, "")
+        if configured:
+            return configured
+        return default if default is not None else match.group(0)
+
+    return RUNTIME_ENV_PLACEHOLDER.sub(replace, value)
+
+
+def _expand_runtime_env_placeholders(server):
+    """Expand runtime endpoint values without ever materializing credentials."""
+    expanded = dict(server)
+    if "url" in expanded:
+        expanded["url"] = _expand_runtime_env_value(expanded["url"])
+    if isinstance(expanded.get("env"), dict):
+        expanded["env"] = {
+            key: _expand_runtime_env_value(value)
+            for key, value in expanded["env"].items()
+        }
     return expanded
 
 def toml_loads(text):
@@ -273,8 +311,10 @@ def os_view(s):
                     **(merged.get("env") or {}),
                     "PATH": _windows_node_path(merged["command"]),
                 }
-        return merged
-    return _expand_local_path_placeholders({k: v for k, v in s.items() if k != "windows"})
+        return _expand_runtime_env_placeholders(merged)
+    return _expand_runtime_env_placeholders(
+        _expand_local_path_placeholders({k: v for k, v in s.items() if k != "windows"})
+    )
 
 def _env_present(var):
     """True if the env var is defined and non-empty."""
@@ -958,6 +998,22 @@ def cmd_expected_servers(cli):
             print(n)
     return 0
 
+
+def cmd_server_url(name):
+    """Print one resolved HTTP endpoint for health checks, never credentials."""
+    man = _load_manifest_or_stop(quiet=True)
+    if man is None:
+        return 2
+    server = man.get(name)
+    if server is None:
+        return 3
+    if server.get("transport") != "http" or not isinstance(server.get("url"), str):
+        print(f">>> STOP: server '{name}' has no rendered HTTP URL.", file=sys.stderr)
+        return 2
+    print(server["url"])
+    return 0
+
+
 def _cli_config_path(cli):
     """Native config path whose MCP section render.py writes (and backs up).
     Mirrors load_current()'s per-CLI paths so --revert and --write agree."""
@@ -1278,6 +1334,8 @@ def main():
     ap.add_argument("--write", metavar="CLI", choices=list(CLI), help="regenerate a CLI's MCP config (default: diff only).")
     ap.add_argument("--expected-servers", metavar="CLI", choices=list(CLI),
                      help="print (one per line) the manifest server names that target CLI and pass require_env filtering; machine-consumable, exit 0.")
+    ap.add_argument("--server-url", metavar="SERVER",
+                     help="print one resolved HTTP endpoint for a rendered server; exits 3 when it is not active on this host.")
     ap.add_argument("--revert", metavar="CLI", choices=list(CLI),
                      help="restore a CLI's native config from the most recent render.py .bak-* backup (backs up the current file first).")
     ap.add_argument("--adopt", metavar="CLI", choices=list(CLI),
@@ -1291,6 +1349,8 @@ def main():
     args = ap.parse_args()
     if args.inventory:
         return cmd_inventory()
+    if args.server_url:
+        return cmd_server_url(args.server_url)
     if args.expected_servers:
         return cmd_expected_servers(args.expected_servers)
     if args.adopt:

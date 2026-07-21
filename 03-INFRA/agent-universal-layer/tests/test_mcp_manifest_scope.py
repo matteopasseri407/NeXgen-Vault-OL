@@ -66,6 +66,19 @@ def test_real_manifest_validates_against_schema():
     assert "memory" in servers
 
 
+def test_vault_library_keeps_its_complete_endpoint_in_user_configuration():
+    """A shared template must not bake one tunnel port or MCP route in.
+
+    The endpoint can include a non-default port and a custom MCP path.  The
+    renderer resolves it for Node clients, while OpenCode keeps its native
+    environment reference.
+    """
+    vault = _real_servers()["vault-library"]
+    assert vault["url"] == "${VAULT_LIBRARY_URL}"
+    assert vault["url_env"] == "VAULT_LIBRARY_URL"
+    assert vault["require_env"] == "VAULT_LIBRARY_URL"
+
+
 # ---- memory is opt-in, not mounted by default ------------------------------
 
 def test_memory_server_requires_explicit_opt_in():

@@ -108,8 +108,10 @@ def test_vault_library_probe_uses_mcp_protocol_headers():
     powershell = (repo / "03-INFRA/scripts/agent-doctor.ps1").read_text(encoding="utf-8")
 
     assert "code -X OPTIONS" in bash
+    assert "--server-url vault-library" in bash
     assert "Accept: application/json, text/event-stream" in bash
-    assert "httpcode $env:VAULT_LIBRARY_URL" in powershell
+    assert "httpcode $VaultLibraryUrl" in powershell
+    assert "--server-url vault-library" in powershell
     assert "Accept = \"application/json, text/event-stream\"" in powershell
     assert '"Options"' in powershell
 

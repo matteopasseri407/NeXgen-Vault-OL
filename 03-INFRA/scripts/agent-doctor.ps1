@@ -373,10 +373,19 @@ $c = httpcode "http://127.0.0.1:33003/health" $null
 if ($c -eq 200) { ok "vault-ocr (33003): $c" }
 elseif (Test-ConnectorExpected "OCR_TUNNEL_PORT") { bad "vault-ocr (33003): $c" }
 else { ok "vault-ocr (33003): not reachable ($c) - not expected in current Mode (Local-Only / OCR_TUNNEL_PORT not set)" }
-if ($env:VAULT_LIBRARY_URL) {
+$VaultLibraryUrl = $env:VAULT_LIBRARY_URL
+if ($NexgenPython -and (Test-Path -LiteralPath $RenderPy)) {
+  $renderedVaultUrl = (& $NexgenPythonCommand @NexgenPythonPrefix $RenderPy --server-url vault-library 2>$null | Select-Object -First 1)
+  if ($LASTEXITCODE -eq 0 -and $renderedVaultUrl) {
+    $VaultLibraryUrl = "$renderedVaultUrl"
+  } elseif ($LASTEXITCODE -ne 3) {
+    bad "vault-library endpoint cannot be derived from the rendered manifest"
+  }
+}
+if ($VaultLibraryUrl) {
   # Streamable HTTP MCP rejects a generic GET without its protocol Accept
   # header. OPTIONS is a bounded, authenticated route probe.
-  $c = httpcode $env:VAULT_LIBRARY_URL @{ Authorization = "Bearer $($env:VAULT_LIBRARY_TOKEN)"; Accept = "application/json, text/event-stream" } "Options"
+  $c = httpcode $VaultLibraryUrl @{ Authorization = "Bearer $($env:VAULT_LIBRARY_TOKEN)"; Accept = "application/json, text/event-stream" } "Options"
   if ($c -eq 200 -or $c -eq 405) { ok "vault-library: $c (up)" } else { bad "vault-library: $c" }
 } else { warn "VAULT_LIBRARY_URL not in env" }
 if (Get-Command npx -ErrorAction SilentlyContinue) { ok "playwright: npx available" } else { warn "npx not in PATH (playwright MCP)" }
