@@ -41,6 +41,7 @@ engines:
     inactive: false
     api_key: {json.dumps(api_key)}
     results_per_page: 20
+    max_page: 1
 """
 
     destination.parent.mkdir(parents=True, exist_ok=True)
