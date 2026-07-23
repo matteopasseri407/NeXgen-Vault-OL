@@ -95,6 +95,7 @@ def test_settings_renderer_writes_only_the_expected_engine(tmp_path):
             "inactive": False,
             "api_key": "test-brave-key",
             "results_per_page": 20,
+            "max_page": 1,
         }
     ]
     if os.name != "nt":

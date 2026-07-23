@@ -10,6 +10,16 @@ of any engine release.
 
 ## [Unreleased]
 
+## [0.92.3] - 2026-07-23
+
+### Fixed
+
+- The optional Brave-backed SearXNG engine now stops at its first 20-result
+  page. Firecrawl deliberately requests a larger internal buffer, but Brave's
+  API rejects the resulting `offset=20` request. The local page cap preserves
+  all 20 candidates, avoids the redundant provider request, and keeps search
+  logs clean.
+
 ## [0.92.2] - 2026-07-23
 
 ### Added
