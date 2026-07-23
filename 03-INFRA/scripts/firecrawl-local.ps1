@@ -18,6 +18,7 @@ Usage:
 Defaults:
   FIRECRAWL_API_URL=http://127.0.0.1:33002
   FIRECRAWL_API_KEY=local-self-hosted
+  search --limit=20
 '@
 }
 
@@ -90,7 +91,7 @@ switch ($Command) {
     exit 0
   }
   'search' {
-    $queryParts = @(); $limit = 5; $sources = $null; $scrape = $false; $scrapeFormats = 'markdown'; $output = $null; $asJson = $false
+    $queryParts = @(); $limit = 20; $sources = $null; $scrape = $false; $scrapeFormats = 'markdown'; $output = $null; $asJson = $false
     for ($i = 0; $i -lt $Arguments.Count; $i++) {
       switch ($Arguments[$i]) {
         '--limit' { $i++; $limit = [int]$Arguments[$i] }

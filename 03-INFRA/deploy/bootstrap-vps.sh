@@ -194,6 +194,13 @@ ensure_env_secret FIRECRAWL_REDIS_PASSWORD
 # Redis -- never an unauthenticated datastore, never a hand-invented value.
 ensure_env_secret FIRECRAWL_POSTGRES_PASSWORD
 
+# SearXNG is enabled only when the operator configured the Brave key. Its
+# own secret is generated here, never hand-written and never printed.
+brave_search_api_key="$(grep -E '^BRAVE_SEARCH_API_KEY=' .env | tail -1 | cut -d '=' -f2-)"
+if [ -n "$brave_search_api_key" ]; then
+  ensure_env_secret FIRECRAWL_SEARXNG_SECRET
+fi
+
 # VAULT_LIBRARY_TOKEN: bearer auth for the vault-mcp container AND the
 # workstation CLIs (manifest.yaml reads the same variable name). Generated
 # unconditionally, like the n8n key: a write-enabled vault server must never
@@ -236,7 +243,17 @@ echo "==> n8n"
 docker compose -f n8n/docker-compose.yml --env-file .env up -d --build
 
 echo "==> Firecrawl"
-docker compose -f firecrawl/docker-compose.yml --env-file .env up -d --build
+if [ -n "$brave_search_api_key" ]; then
+  echo "  deep search: enabled (pinned SearXNG + Brave API)"
+  docker compose \
+    -f firecrawl/docker-compose.yml \
+    -f firecrawl/docker-compose.search.yml \
+    --env-file .env up -d --build
+else
+  echo "  WARNING: BRAVE_SEARCH_API_KEY is empty; deploying scrape/crawl/map only."
+  echo "  Add the key and re-run bootstrap-vps.sh to enable deep Web search."
+  docker compose -f firecrawl/docker-compose.yml --env-file .env up -d --build
+fi
 
 echo "==> Vault OCR"
 docker compose -f ocr/docker-compose.yml --env-file .env up -d --build

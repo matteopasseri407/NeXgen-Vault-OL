@@ -10,6 +10,15 @@ of any engine release.
 
 ## [Unreleased]
 
+### Added
+
+- The Cloud-Server Firecrawl deployment now has an optional, pinned SearXNG overlay backed exclusively by the Brave Search API. `bootstrap-vps.sh` enables it when a Brave key is configured and generates the separate SearXNG secret without printing it.
+- `agent-doctor --strict` now performs a cached end-to-end Firecrawl search, so a reachable API with a broken search backend no longer passes the functional check.
+
+### Changed
+
+- Firecrawl research now requests up to 20 candidates in the first provider query, then scrapes and compares several relevant sources. The deterministic Linux and Windows wrappers use the same 20-result default.
+
 ## [0.92.1] - 2026-07-21
 
 ### Fixed

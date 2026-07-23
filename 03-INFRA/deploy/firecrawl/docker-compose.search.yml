@@ -1,0 +1,50 @@
+# Optional zero-cost deep-search overlay for the Firecrawl stack.
+#
+# Enable it by setting BRAVE_SEARCH_API_KEY in ../.env and running
+# bootstrap-vps.sh. The Brave Search plan includes a monthly free credit;
+# set the provider-side usage limit to "Free credits only" so this overlay
+# can never create a bill.
+#
+# The API key is rendered into /etc/searxng/settings.yml at container start.
+# It is never committed, printed, or passed on a command line. Firecrawl
+# talks to SearXNG only on the private Compose network.
+
+services:
+  firecrawl-api:
+    environment:
+      - SEARXNG_ENDPOINT=http://firecrawl-searxng:8080
+      # Keep this explicit and exclusive. Adding SEARXNG_CATEGORIES=general
+      # creates a union in SearXNG and silently re-enables fragile public
+      # engines alongside Brave.
+      - SEARXNG_ENGINES=braveapi
+    depends_on:
+      firecrawl-searxng:
+        condition: service_healthy
+
+  firecrawl-searxng:
+    image: ${FIRECRAWL_SEARXNG_IMAGE:-docker.io/searxng/searxng@sha256:e314fcbbfb221777f5599ce20c0c48c5d78a876a278bad4a50adc9aa5b661d3a}
+    container_name: firecrawl-searxng
+    restart: unless-stopped
+    environment:
+      - "BRAVE_SEARCH_API_KEY=${BRAVE_SEARCH_API_KEY:?set BRAVE_SEARCH_API_KEY in .env to enable deep search}"
+      - "FIRECRAWL_SEARXNG_SECRET=${FIRECRAWL_SEARXNG_SECRET:?run bootstrap-vps.sh to generate FIRECRAWL_SEARXNG_SECRET}"
+    entrypoint: ["/opt/nexgen-searxng/entrypoint.sh"]
+    volumes:
+      - ./searxng:/opt/nexgen-searxng:ro
+      - firecrawl-searxng-cache:/var/cache/searxng
+    mem_limit: 768m
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python3 -c "import json,urllib.request as u;
+          d=json.load(u.urlopen('http://127.0.0.1:8080/config',timeout=5));
+          raise SystemExit(0 if any(e.get('name')=='braveapi' and e.get('enabled')
+          for e in d.get('engines',[])) else 1)"
+      interval: 30s
+      timeout: 8s
+      start_period: 45s
+      retries: 3
+
+volumes:
+  firecrawl-searxng-cache:

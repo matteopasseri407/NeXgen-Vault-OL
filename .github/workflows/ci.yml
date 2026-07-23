@@ -209,6 +209,8 @@ jobs:
           # placeholders so `config` can validate the template; real deploys
           # get their values from bootstrap-vps.sh.
           export FIRECRAWL_POSTGRES_PASSWORD="ci-validate-only-placeholder"
+          export BRAVE_SEARCH_API_KEY="ci-validate-only-placeholder"
+          export FIRECRAWL_SEARXNG_SECRET="ci-validate-only-placeholder"
           export VAULT_LIBRARY_TOKEN="ci-validate-only-placeholder"
           export VAULT_MCP_UID=1000 VAULT_MCP_GID=1000
           for f in \
@@ -220,6 +222,11 @@ jobs:
             echo "== $f =="
             docker compose -f "$f" config >/dev/null
           done
+          echo "== firecrawl search overlay =="
+          docker compose \
+            -f 03-INFRA/deploy/firecrawl/docker-compose.yml \
+            -f 03-INFRA/deploy/firecrawl/docker-compose.search.yml \
+            config >/dev/null
 
   powershell-analysis:
     # Pure static linting of .ps1 files on Linux - not execution. The

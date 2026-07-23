@@ -1,7 +1,8 @@
 #requires -Version 5.1
 <#
   agent-doctor.ps1 - Windows alignment check (port of agent-doctor.sh).
-  Read-only. Exit 0 if no FAIL, 1 otherwise.
+  Read-only with respect to configuration and service state. The strict
+  Firecrawl probe may refresh a small local success cache.
   Usage: .\agent-doctor.ps1            readable report
          .\agent-doctor.ps1 -Summary   one-line summary (for healthcheck)
   NOTE: on Windows, Codex/Antigravity may be copies or symlinks of the canonical
@@ -366,7 +367,28 @@ if ($c -eq 200) { ok "n8n-mcp (5678): $c" }
 elseif (Test-ConnectorExpected "N8N_MCP_TOKEN") { bad "n8n-mcp (5678): $c" }
 else { ok "n8n-mcp (5678): not reachable ($c) - not expected in current Mode (Local-Only / N8N_MCP_TOKEN not set)" }
 $c = httpcode "http://127.0.0.1:33002/" $null
-if ($c -eq 200 -or $c -eq 302) { ok "firecrawl (33002): $c" }
+if ($c -eq 200 -or $c -eq 302) {
+  ok "firecrawl (33002): $c"
+  if ($Strict -and (Test-ConnectorExpected "FIRECRAWL_TUNNEL_PORT")) {
+    $SearchHealthScript = Join-Path $PSScriptRoot "firecrawl-search-health.py"
+    $LocalCacheRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HomeDir ".cache" }
+    $SearchHealthCache = Join-Path $LocalCacheRoot "NeXgen\firecrawl-search-health.json"
+    if ($NexgenPython -and (Test-Path -LiteralPath $SearchHealthScript)) {
+      $searchResult = (& $NexgenPythonCommand @NexgenPythonPrefix $SearchHealthScript --cache $SearchHealthCache 2>$null)
+      if ($LASTEXITCODE -eq 0) {
+        if ("$searchResult" -match '"status":"cached"') {
+          ok "firecrawl search: end-to-end result cached for less than 24h"
+        } else {
+          ok "firecrawl search: live end-to-end query returned the expected source"
+        }
+      } else {
+        bad "firecrawl search: API is reachable but the end-to-end query failed"
+      }
+    } else {
+      warn "firecrawl search: strict probe skipped because Python or firecrawl-search-health.py is missing"
+    }
+  }
+}
 elseif (Test-ConnectorExpected "FIRECRAWL_TUNNEL_PORT") { bad "firecrawl (33002): $c" }
 else { ok "firecrawl (33002): not reachable ($c) - not expected in current Mode (Local-Only / FIRECRAWL_TUNNEL_PORT not set)" }
 $c = httpcode "http://127.0.0.1:33003/health" $null

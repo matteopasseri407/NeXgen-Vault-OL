@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2015
 # agent-doctor — verifies that ALL agents are genuinely aligned and operational.
-# Read-only: changes nothing. Exit 0 if no FAIL, 1 otherwise.
+# Read-only with respect to configuration and service state. The strict
+# Firecrawl probe may refresh a small local success cache. Exit 0 if no FAIL.
 # Usage:
 #   agent-doctor.sh             readable report (colors, sections)
 #   agent-doctor.sh --summary   one-line summary (for digests/alerts)
@@ -47,7 +48,8 @@ agent-doctor.sh [--summary] [--strict]
 Default: fast structural and service health checks.
 --summary: one-line output for alerting.
 --strict: add real CLI consumer checks, including OpenCode MCP list,
-          Antigravity global MCP path, and vault-ocr stdio framing.
+          Antigravity global MCP path, vault-ocr stdio framing, and one
+          cached end-to-end Firecrawl search.
 EOF
       exit 0 ;;
   esac
@@ -332,6 +334,22 @@ fi
 c=$(code http://127.0.0.1:33002/)
 if [ "$c" = 200 ] || [ "$c" = 302 ]; then
   ok "firecrawl (33002): $c"
+  if [ "$STRICT" = 1 ] && connector_expected FIRECRAWL_TUNNEL_PORT; then
+    search_health="$SELF_DIR/firecrawl-search-health.py"
+    search_cache="${XDG_CACHE_HOME:-$HOME/.cache}/nexgen/firecrawl-search-health.json"
+    if command -v python3 >/dev/null 2>&1 && [ -f "$search_health" ]; then
+      if search_result="$(python3 "$search_health" --cache "$search_cache" 2>/dev/null)"; then
+        case "$search_result" in
+          *'"status":"cached"'*) ok "firecrawl search: end-to-end result cached for less than 24h" ;;
+          *) ok "firecrawl search: live end-to-end query returned the expected source" ;;
+        esac
+      else
+        fail "firecrawl search: API is reachable but the end-to-end query failed"
+      fi
+    else
+      warn "firecrawl search: strict probe skipped because Python or firecrawl-search-health.py is missing"
+    fi
+  fi
 elif connector_expected FIRECRAWL_TUNNEL_PORT; then
   fail "firecrawl (33002): $c"
 else

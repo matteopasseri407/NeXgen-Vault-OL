@@ -44,11 +44,14 @@
 # the firecrawl-nuq-data volume (backup-restore.sh covers it); Redis remains
 # a transient cache by design.
 #
-# Search endpoint note: upstream's /search needs a search backend (their
-# compose adds a SearXNG service; hosted keys work too). This stack does not
-# bundle one — scrape/crawl/extract work without it, and the agent CLIs'
-# native web search remains the documented fallback. To point at your own
-# SearXNG, set the SEARXNG_* variables in .env.
+# Search endpoint note: scrape/crawl/extract work with this base file alone.
+# The sibling docker-compose.search.yml overlay adds the pinned SearXNG +
+# Brave API path used by the full Cloud-Server profile. bootstrap-vps.sh
+# activates that overlay when BRAVE_SEARCH_API_KEY is present in .env.
+#
+# Do not combine SEARXNG_ENGINES with SEARXNG_CATEGORIES. SearXNG treats
+# those selectors as a union, so `categories=general` silently re-enables
+# fragile public engines alongside the explicit Brave backend.
 
 services:
   firecrawl-api:
@@ -79,10 +82,9 @@ services:
       - USE_DB_AUTHENTICATION=false
       # Secrets: set these in .env on the VPS, never commit them.
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      # Optional external search backend (see header note).
+      # Optional external search backend (see header note and search overlay).
       - SEARXNG_ENDPOINT=${SEARXNG_ENDPOINT:-}
       - SEARXNG_ENGINES=${SEARXNG_ENGINES:-}
-      - SEARXNG_CATEGORIES=${SEARXNG_CATEGORIES:-}
       - "HEALTHCHECK_JS=require('http').get('http://127.0.0.1:3002/', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"
     depends_on:
       firecrawl-redis:

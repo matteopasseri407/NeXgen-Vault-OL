@@ -26,7 +26,9 @@ deploy/
 ├── n8n/
 │   └── docker-compose.yml  # n8n automation engine
 ├── firecrawl/
-│   └── docker-compose.yml  # Firecrawl (2.11: harness API + Redis + RabbitMQ + NUQ Postgres + Playwright)
+│   ├── docker-compose.yml  # Firecrawl base: scrape, crawl, map, extract
+│   ├── docker-compose.search.yml  # Optional pinned SearXNG + Brave search
+│   └── searxng/            # Secret-safe settings renderer and entrypoint
 ├── ocr/
 │   ├── docker-compose.yml  # Vault OCR API (RapidOCR)
 │   ├── api/                # OCR service source (FastAPI + RapidOCR)
@@ -62,6 +64,13 @@ bash bootstrap-vps.sh
 Requirements on the VPS: Docker, and the Compose v2 plugin (`docker compose`,
 not the legacy standalone `docker-compose`).
 
+To enable Web search, put a Brave Search API key in
+`BRAVE_SEARCH_API_KEY` inside `.env`. The bootstrap generates the separate
+SearXNG session secret and merges `firecrawl/docker-compose.search.yml`
+automatically. Leave the key empty for a scrape-only deployment. Set the
+Brave dashboard usage limit to **Free credits only** so the provider rejects
+requests before they can become paid overage.
+
 ## Image pins
 
 Every service image in the four `docker-compose.yml` files is pinned to an
@@ -72,7 +81,8 @@ the same images instead of drifting to whatever shipped that day. Every pin
 can be overridden with an env var (`N8N_IMAGE`, `OCR_IMAGE`,
 `VAULT_MCP_IMAGE`, `FIRECRAWL_IMAGE`, `FIRECRAWL_REDIS_IMAGE`,
 `FIRECRAWL_RABBITMQ_IMAGE`, `FIRECRAWL_NUQ_POSTGRES_IMAGE`,
-`FIRECRAWL_PLAYWRIGHT_IMAGE`) — see `.env.example`.
+`FIRECRAWL_PLAYWRIGHT_IMAGE`, `FIRECRAWL_SEARXNG_IMAGE`) — see
+`.env.example`.
 
 Note: the Firecrawl images use the `ghcr.io/firecrawl/*` path. The project
 moved there from `ghcr.io/mendableai/*` upstream; the old path no longer
@@ -175,9 +185,10 @@ stack (e.g. a VPS that only hosts n8n for a Local-Only install).
 ## Resource notes
 
 - n8n: 1g memory limit.
-- Firecrawl: ~6g total cap across services (harness API 3g + Playwright 1g +
-  NUQ Postgres 1g + RabbitMQ 512m + Redis 512m). The 2.11 architecture is
-  heavier than the old API+worker shape — budget the VPS accordingly.
+- Firecrawl: ~6g total cap for the base services (harness API 3g + Playwright
+  1g + NUQ Postgres 1g + RabbitMQ 512m + Redis 512m), plus up to 768m when
+  the SearXNG search overlay is enabled. The 2.11 architecture is heavier
+  than the old API+worker shape — budget the VPS accordingly.
 - OCR: 2g memory, 1.5 CPU (RapidOCR model load). Keep one worker.
 - vault-mcp: 512m memory limit.
 - Add `--memory` caps to any extra container you add; an uncapped OOM can

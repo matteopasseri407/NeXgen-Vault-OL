@@ -38,6 +38,7 @@ Usage:
 Defaults:
   FIRECRAWL_API_URL=http://127.0.0.1:33002
   FIRECRAWL_API_KEY=local-self-hosted
+  search --limit=20
 EOF
 }
 
@@ -130,7 +131,7 @@ case "$cmd" in
   search)
     need_jq
     query=""
-    limit=5
+    limit=20
     sources=""
     scrape=0
     scrape_formats="markdown"
