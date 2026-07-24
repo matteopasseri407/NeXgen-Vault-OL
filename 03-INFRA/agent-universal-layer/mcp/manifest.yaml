@@ -76,7 +76,7 @@ servers:
   vault-ocr:
     transport: stdio
     command: python3
-    args: ["${KNOWLEDGE_VAULT_PATH}/03-INFRA/deploy/ocr/mcp/vault_ocr_mcp.py"]
+    args: ["${AGENT_ENGINE_ROOT}/deploy/ocr/mcp/vault_ocr_mcp.py"]
     env:
       VAULT_OCR_API_URL: "http://127.0.0.1:${OCR_TUNNEL_PORT:-33003}"
     require_env: OCR_TUNNEL_PORT
@@ -84,8 +84,9 @@ servers:
     targets: [claude, codex, antigravity, opencode]
     windows:
       command: python
-      args: ["${KNOWLEDGE_VAULT_PATH}\\03-INFRA\\deploy\\ocr\\mcp\\vault_ocr_mcp.py"]
+      args: ["${AGENT_ENGINE_ROOT}\\deploy\\ocr\\mcp\\vault_ocr_mcp.py"]
       env:
+
         VAULT_OCR_API_URL: "http://127.0.0.1:${OCR_TUNNEL_PORT:-33003}"
 
   # ---- extra per-CLI (opzionali, non bloccanti) ----------------------------
